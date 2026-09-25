@@ -84,7 +84,7 @@ def fetch_ffmpeg(plat: str, arch: str, out: Path) -> None:
                     extracted = tf.extractfile(member)
                     assert extracted is not None
                     (out / "LICENSE-ffmpeg.txt").write_bytes(extracted.read())
-    print(f"  ffmpeg/ffprobe → {out}")
+    print(f"  ffmpeg/ffprobe -> {out}")
 
 
 def exiftool_version() -> str:
@@ -133,7 +133,7 @@ def fetch_exiftool(plat: str, arch: str, out: Path) -> None:
                     extracted = tf.extractfile(member)
                     assert extracted is not None
                     (out / f"{parts[0]}-exiftool.txt").write_bytes(extracted.read())
-    print(f"  exiftool {ver} → {out}")
+    print(f"  exiftool {ver} -> {out}")
 
 
 def main() -> None:

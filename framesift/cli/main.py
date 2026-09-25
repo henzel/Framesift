@@ -542,6 +542,12 @@ def gui(
 
 
 def main() -> None:
+    # Windows consoles and redirected output may not be UTF-8; never crash on a reason string
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
     app()
 
 
