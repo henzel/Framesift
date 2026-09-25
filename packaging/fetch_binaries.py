@@ -181,9 +181,16 @@ def main() -> None:
     parser.add_argument("--skip-exiftool", action="store_true")
     args = parser.parse_args()
     out = ROOT / "packaging" / "bin" / args.platform
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
+    out.mkdir(parents=True, exist_ok=True)
+    stale = []
+    if not args.skip_ffmpeg:
+        stale += ["ffmpeg", "ffmpeg.exe", "ffprobe", "ffprobe.exe", "LICENSE-ffmpeg.txt"]
+    if not args.skip_exiftool:
+        stale += ["exiftool", "exiftool.exe", "README-exiftool.txt", "LICENSE-exiftool.txt"]
+        shutil.rmtree(out / "lib", ignore_errors=True)
+        shutil.rmtree(out / "exiftool_files", ignore_errors=True)
+    for name in stale:
+        (out / name).unlink(missing_ok=True)
     if not args.skip_ffmpeg:
         fetch_ffmpeg(args.platform, args.arch, out)
     if not args.skip_exiftool:

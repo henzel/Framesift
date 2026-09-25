@@ -13,7 +13,7 @@ from PySide6.QtGui import QImage
 
 from framesift.engine.catalog import Catalog
 from framesift.engine.config import Roots
-from framesift.engine.imaging import DecodeError, apply_orientation, open_full
+from framesift.engine.imaging import DecodeError, open_full
 from framesift.engine.jobs import Cancelled, JobControl
 from framesift.engine.paths import os_path
 from framesift.engine.thumbs import ThumbCache, render_thumbnail
@@ -162,8 +162,7 @@ class ImageTask(QRunnable):
 
     def run(self) -> None:
         try:
-            im = open_full(self.path, self.fmt, self.ext)
-            im = apply_orientation(im, self.orientation)
+            im = open_full(self.path, self.fmt, self.ext, self.orientation)
             full = True
             if self.max_side and max(im.size) > self.max_side:
                 im = im.copy()

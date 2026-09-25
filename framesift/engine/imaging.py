@@ -74,33 +74,65 @@ def load_embedded_jpeg(path: Path, offset: int, length: int) -> Image.Image | No
         return None
 
 
+def heif_orientation(path: Path) -> tuple[bool, int | None]:
+    """(libheif applies a transform: irot/imir present, EXIF-style orientation of the file)."""
+    from framesift.engine.metadata.base import FileReader
+    from framesift.engine.metadata.isobmff import parse_heif_meta, read_heif
+
+    try:
+        with FileReader(path) as reader:
+            meta = parse_heif_meta(reader.read_at, reader.size)
+            primary = meta.primary
+            has_transform = primary is not None and (
+                meta.find_prop(primary, b"irot") is not None
+                or meta.find_prop(primary, b"imir") is not None
+            )
+            info = read_heif(reader)
+            return has_transform, info.orientation
+    except Exception:
+        return False, None
+
+
 def decode_heif(
-    path: Path, *, max_side: int | None = None, prefer_thumbnail: bool = True
-) -> Image.Image:
-    """Decode a HEIF/HEIC image. Uses the embedded thumbnail when a small result is enough."""
-    if register_heif():
+    path: Path,
+    *,
+    max_side: int | None = None,
+    prefer_thumbnail: bool = True,
+    force_ffmpeg: bool = False,
+) -> tuple[Image.Image, str]:
+    """Decode a HEIF/HEIC image upright. Returns (image, source) with source in
+    heif_thumb | decode | ffmpeg. libheif applies irot/imir itself; the EXIF orientation
+    is applied here when no irot/imir exists; the ffmpeg path decodes raw (-noautorotate)
+    and the orientation is applied here for every FFmpeg version alike."""
+    has_transform, orientation = heif_orientation(path)
+    last: Exception = ImportError("pi_heif")
+    if not force_ffmpeg and register_heif():
         try:
             import pi_heif
 
             heif = pi_heif.open_heif(to_os(path), convert_hdr_to_8bit=True)
+            im: Image.Image | None = None
+            source = "decode"
             if max_side and prefer_thumbnail:
                 thumbs = [
                     t for t in getattr(heif, "thumbnails", []) if max(t.size) >= max_side // 2
                 ]
                 if thumbs:
-                    t = min(thumbs, key=lambda t: max(t.size))
-                    im = t.to_pillow()
-                    im.info["orientation"] = 1
-                    return im
-            return heif.to_pillow()
+                    im = min(thumbs, key=lambda t: max(t.size)).to_pillow()
+                    source = "heif_thumb"
+            if im is None:
+                im = heif.to_pillow()
+            if not has_transform and orientation and orientation != 1:
+                im = apply_orientation(im, orientation)
+            return im, source
         except Exception as exc:
             last = exc
-    else:
-        last = ImportError("pi_heif")
-    im = ffmpeg_decode_image(path)
-    if im is None:
+    im2 = ffmpeg_decode_image(path)
+    if im2 is None:
         raise DecodeError(f"HEIF decode failed: {last}")
-    return im
+    if orientation and orientation != 1:
+        im2 = apply_orientation(im2, orientation)
+    return im2, "ffmpeg"
 
 
 def ffmpeg_decode_image(path: Path, max_side: int | None = None) -> Image.Image | None:
@@ -108,7 +140,7 @@ def ffmpeg_decode_image(path: Path, max_side: int | None = None) -> Image.Image 
     exe = find_binary("ffmpeg")
     if not exe:
         return None
-    args = [exe, "-v", "error", "-nostdin", "-i", str(path), "-frames:v", "1"]
+    args = [exe, "-v", "error", "-nostdin", "-noautorotate", "-i", str(path), "-frames:v", "1"]
     if max_side:
         args += [
             "-vf",
@@ -169,16 +201,16 @@ def video_frame(path: Path, *, at_seconds: float = 1.0, max_side: int = 320) -> 
         return None
 
 
-def open_full(path: Path, fmt: str | None, ext: str) -> Image.Image:
-    """Full decode of a photo (any supported format). Raises DecodeError."""
+def open_full(path: Path, fmt: str | None, ext: str, orientation: int | None = None) -> Image.Image:
+    """Full, upright decode of a photo (any supported format). Raises DecodeError."""
     family = fmt or ext
     try:
         if family in ("heic", "heif", "hif", "avif"):
-            im = decode_heif(path, prefer_thumbnail=False)
-        else:
-            im = Image.open(to_os(path))
-            im.load()
-        return im
+            im, _source = decode_heif(path, prefer_thumbnail=False)
+            return im
+        im = Image.open(to_os(path))
+        im.load()
+        return apply_orientation(im, orientation)
     except DecodeError:
         raise
     except Exception as exc:
@@ -196,13 +228,8 @@ def small_image(path: Path, meta: dict[str, Any], max_side: int = 256) -> tuple[
         if im is not None and max(im.size) >= 96:
             return _shrink(apply_orientation(im, orientation), max_side), "embedded"
     if fmt in ("heic", "heif", "avif") or ext in ("heic", "heif", "hif"):
-        im = decode_heif(path, max_side=max_side, prefer_thumbnail=True)
-        source = (
-            "heif_thumb" if im.info.get("orientation") == 1 and max(im.size) < 1024 else "decode"
-        )
-        return _shrink(
-            apply_orientation(im, orientation) if source == "decode" else im, max_side
-        ), source
+        im, source = decode_heif(path, max_side=max_side, prefer_thumbnail=True)
+        return _shrink(im, max_side), source
     if fmt in ("cr2", "nef", "arw", "orf", "rw2", "raf", "pef", "srw", "cr3") or ext in (
         "cr2",
         "nef",
