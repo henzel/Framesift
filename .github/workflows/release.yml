@@ -60,7 +60,7 @@ jobs:
         if: matrix.platform == 'macos' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
         run: |
           brew install nasm pkg-config
-          packaging/macos/build_ffmpeg.sh 7.1.1
+          bash packaging/macos/build_ffmpeg.sh 7.1.1
       - name: Linux system libraries for Qt
         if: matrix.platform == 'linux'
         run: |
@@ -89,7 +89,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: packaging/macos/make_dmg.sh ${{ matrix.arch }}
+        run: bash packaging/macos/make_dmg.sh ${{ matrix.arch }}
       - name: Package (Windows zip)
         if: matrix.platform == 'windows'
         env:
@@ -98,7 +98,7 @@ jobs:
         run: python packaging/windows/make_zip.py
       - name: Package (Linux AppImage)
         if: matrix.platform == 'linux'
-        run: packaging/linux/make_appimage.sh
+        run: bash packaging/linux/make_appimage.sh
       - uses: actions/upload-artifact@v4
         with:
           name: framesift-${{ matrix.label }}
