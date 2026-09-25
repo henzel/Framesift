@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Framesift runtime data
+.framesift/
+_framesift_review/
+_framesift_delete/
+*.framesift-part
+
+# Packaging outputs
+packaging/out/
+*.dmg
+*.AppImage
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

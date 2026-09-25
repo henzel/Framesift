@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "framesift"
+dynamic = ["version"]
+description = "Sort large photo and video archives safely: review, classify, stage junk for review, undo everything."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Framesift contributors" }]
+keywords = ["photos", "videos", "duplicates", "archive", "culling", "heic", "live-photo", "nas"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Graphics",
+]
+dependencies = [
+  "Pillow>=11",
+  "pi-heif==1.4.0",
+  "numpy>=1.26",
+  "blake3>=1.0",
+  "typer>=0.12",
+  "psutil>=5.9",
+  "send2trash>=1.8",
+  "platformdirs>=4",
+]
+
+[project.optional-dependencies]
+gui = [
+  "PySide6>=6.8",
+  "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+]
+dev = [
+  "pytest>=8",
+  "pytest-timeout",
+  "pytest-qt>=4.4",
+  "ruff",
+  "mypy",
+  "pyinstaller>=6.10",
+]
+
+[project.scripts]
+framesift = "framesift.cli.main:main"
+
+[project.gui-scripts]
+framesift-gui = "framesift.gui.app:main"
+
+[project.urls]
+Homepage = "https://github.com/henzel/PhotoSift"
+Issues = "https://github.com/henzel/PhotoSift/issues"
+
+[tool.setuptools]
+packages = { find = { include = ["framesift*"] } }
+
+[tool.setuptools.package-data]
+"framesift.engine" = ["schema/*.sql"]
+"framesift.gui" = ["i18n/*.qm", "resources/*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "framesift.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 300
+addopts = "-q"
+markers = ["gui: tests that need PySide6", "slow: long-running tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N"]
+ignore = ["E501", "N802", "N815", "N806", "N818", "UP031"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+ignore_missing_imports = true
+check_untyped_defs = true
