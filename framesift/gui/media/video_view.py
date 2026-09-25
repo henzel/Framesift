@@ -113,36 +113,52 @@ class VideoView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.stack = QStackedWidget(self)
-        self.video_widget = QVideoWidget()
         self.fallback = FfmpegFrameView()
-        self.stack.addWidget(self.video_widget)
         self.stack.addWidget(self.fallback)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.stack)
-        self.player = QMediaPlayer(self)
-        self.audio = QAudioOutput(self)
-        self.player.setAudioOutput(self.audio)
-        self.player.setVideoOutput(self.video_widget)
-        self.player.errorOccurred.connect(self._on_error)
-        self.player.mediaStatusChanged.connect(self._on_status)
+        # Qt Multimedia objects are created on first use: initialising audio devices at
+        # startup is slow and crashed on headless Windows runners.
+        self.video_widget: QVideoWidget | None = None
+        self.player: QMediaPlayer | None = None
+        self.audio: QAudioOutput | None = None
         self.current: Path | None = None
         self.size_hint = (0, 0)
         self.loop = False
         self.using_fallback = False
 
+    def _ensure_player(self) -> QMediaPlayer:
+        if self.player is None:
+            self.video_widget = QVideoWidget()
+            self.stack.addWidget(self.video_widget)
+            self.player = QMediaPlayer(self)
+            self.audio = QAudioOutput(self)
+            self.player.setAudioOutput(self.audio)
+            self.player.setVideoOutput(self.video_widget)
+            self.player.errorOccurred.connect(self._on_error)
+            self.player.mediaStatusChanged.connect(self._on_status)
+        return self.player
+
     def play(self, path: Path, *, width: int = 0, height: int = 0, loop: bool = False) -> None:
         self.stop()
+        player = self._ensure_player()
         self.current = path
         self.size_hint = (width, height)
         self.loop = loop
         self.using_fallback = False
+        assert self.video_widget is not None
         self.stack.setCurrentWidget(self.video_widget)
-        self.player.setSource(QUrl.fromLocalFile(str(path)))
-        self.player.play()
+        player.setSource(QUrl.fromLocalFile(str(path)))
+        player.play()
 
     def _on_status(self, status: QMediaPlayer.MediaStatus) -> None:
-        if status == QMediaPlayer.MediaStatus.EndOfMedia and self.loop and not self.using_fallback:
+        if (
+            status == QMediaPlayer.MediaStatus.EndOfMedia
+            and self.loop
+            and not self.using_fallback
+            and self.player is not None
+        ):
             self.player.setPosition(0)
             self.player.play()
 
@@ -150,7 +166,8 @@ class VideoView(QWidget):
         if self.current is None or self.using_fallback or error == QMediaPlayer.Error.NoError:
             return
         self.using_fallback = True
-        self.player.stop()
+        if self.player is not None:
+            self.player.stop()
         self.stack.setCurrentWidget(self.fallback)
         w, h = self.size_hint
         self.fallback.play(self.current, w or 640, h or 360)
@@ -160,17 +177,21 @@ class VideoView(QWidget):
         if self.using_fallback:
             self.fallback.toggle_pause()
             return
+        if self.player is None:
+            return
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
         else:
             self.player.play()
 
     def toggle_mute(self) -> None:
-        self.audio.setMuted(not self.audio.isMuted())
+        if self.audio is not None:
+            self.audio.setMuted(not self.audio.isMuted())
 
     def stop(self) -> None:
-        self.player.stop()
-        self.player.setSource(QUrl())
+        if self.player is not None:
+            self.player.stop()
+            self.player.setSource(QUrl())
         self.fallback.stop()
         self.current = None
         self.using_fallback = False
