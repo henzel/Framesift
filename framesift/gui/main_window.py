@@ -8,7 +8,6 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
-    QApplication,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -25,7 +24,9 @@ from framesift.engine.jobs import format_eta
 from framesift.gui.i18n import tr
 from framesift.gui.models.tree import human_bytes
 from framesift.gui.prefs import Prefs
+from framesift.gui.views.auto import AutoView
 from framesift.gui.views.browser import BrowserView
+from framesift.gui.views.groups import GroupsView
 from framesift.gui.views.journal import JournalView
 from framesift.gui.views.manual import ReviewView
 from framesift.gui.views.settings import SettingsView
@@ -44,11 +45,15 @@ class MainWindow(QMainWindow):
         self.review = ReviewView(self.gws, self)
         self.journal = JournalView(self.gws, self)
         self.settings = SettingsView(self.prefs, self)
+        self.groups = GroupsView(self.gws, self)
+        self.auto = AutoView(self.gws, self)
         self.pages = QStackedWidget(self)
         self.page_index: dict[str, int] = {}
         for name, widget in (
             ("browser", self.browser),
             ("review", self.review),
+            ("groups", self.groups),
+            ("auto", self.auto),
             ("journal", self.journal),
             ("settings", self.settings),
         ):
@@ -63,6 +68,8 @@ class MainWindow(QMainWindow):
         for name, label in (
             ("browser", "Browser"),
             ("review", "Review"),
+            ("groups", "Groups"),
+            ("auto", "Automatic"),
             ("journal", "Journal"),
             ("settings", "Settings"),
         ):
@@ -86,6 +93,8 @@ class MainWindow(QMainWindow):
         self.browser.open_review.connect(self._open_review)
         self.browser.status.connect(self.status_label.setText)
         self.review.closed.connect(lambda: self.show_page("browser"))
+        self.groups.closed.connect(lambda: self.show_page("auto"))
+        self.auto.open_groups.connect(lambda: self.show_page("groups"))
         self.settings.open_requested.connect(self.open_source)
         self.settings.purge_requested.connect(self.purge_dialog)
         self.settings.language_changed.connect(self._language_changed)
@@ -103,6 +112,10 @@ class MainWindow(QMainWindow):
             act.setChecked(n == name)
         if name == "review":
             self.review.setFocus()
+        elif name == "groups":
+            self.groups.start()
+        elif name == "auto":
+            self.auto.refresh_plan()
         elif name == "journal":
             self.journal.reload()
 
@@ -248,4 +261,3 @@ class MainWindow(QMainWindow):
         self.review.video_view.stop()
         self.gws.shutdown()
         super().closeEvent(event)
-        QApplication.instance().quit() if QApplication.instance() else None

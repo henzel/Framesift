@@ -130,7 +130,7 @@ RU: dict[str, str] = {
     "Largest videos": "Самые большие видео",
     "would move": "будет перенесено",
     "Moved {items} item(s) ({size}) to Review.": "Перенесено в Ревью элементов: {items} ({size}).",
-    "Resume unfinished job?": "Продолжить незавершённую задачу?",
+    "Resume unfinished job?": "Прерванная задача: нажмите «Применить», уже перенесённые элементы пропускаются.",
     "ETA": "Осталось",
     "Done": "Готово",
     "Cancelled": "Отменено",

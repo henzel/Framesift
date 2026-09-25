@@ -11,7 +11,7 @@ from typing import Any
 from framesift import __version__
 from framesift.engine.analysis import set_low_priority
 from framesift.engine.apply import ApplyStats, apply_plan, move_live_videos
-from framesift.engine.catalog import Catalog, CatalogError
+from framesift.engine.catalog import Catalog, CatalogError, utcnow
 from framesift.engine.classify import ClassifyStats, classify
 from framesift.engine.config import ClassifyConfig, Roots
 from framesift.engine.fileops import cleanup_temp_files
@@ -106,6 +106,12 @@ def open_workspace(
         for root in (roots.source, roots.review, roots.delete):
             if root.is_dir():
                 cleanup_temp_files(root)
+        # we hold the exclusive lock, so jobs still marked running belong to a dead process
+        catalog.execute(
+            "UPDATE jobs SET state='interrupted', finished_at=? WHERE state IN ('running','paused')",
+            (utcnow(),),
+        )
+        catalog.commit()
     ws = Workspace(catalog, roots, issues, app=app, _session_kind=session_kind)
     return ws
 

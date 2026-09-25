@@ -134,10 +134,14 @@ class GuiWorkspace(QObject):
             self.closed.emit()
 
     def shutdown(self) -> None:
+        if getattr(self, "_shut", False):
+            return
+        self._shut = True
         self.close()
-        self.thumb_cache.close()
+        self.thumb_loader.pool.waitForDone(5000)
         self.image_loader.pool.clear()
         self.image_loader.pool.waitForDone(5000)
+        self.thumb_cache.close()
 
     # ------------------------------------------------------------------ jobs
     def run_job(self, kind: str, fn: Callable[..., Any]) -> JobThread | None:
