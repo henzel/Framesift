@@ -1,9 +1,11 @@
-"""Threads: engine jobs in a QThread; thumbnails, image decodes and actions in Python pools.
+"""Background work for the GUI on plain Python threads.
 
-Short tasks run on `TaskPool` (a thin wrapper over `concurrent.futures.ThreadPoolExecutor`)
-instead of QThreadPool: Python subclasses of QRunnable are deleted by Qt from its pool
-threads, which corrupted the heap under PySide6 6.11 (crashes on Windows and, rarely, Linux).
-Results reach the GUI through Qt signals, which Qt queues onto the GUI thread."""
+Engine jobs run on `JobThread` (one `threading.Thread` each); thumbnails, image decodes and
+file actions run on `TaskPool` (a thin wrapper over `concurrent.futures.ThreadPoolExecutor`).
+Qt thread classes are avoided on purpose: Python QRunnable subclasses deleted by Qt from its
+pool threads corrupted the heap under PySide6 6.11, and releasing QThread objects right after
+`finished` crashed on Windows. Every Qt object here is created on the GUI thread; results
+reach it through Qt signals, which Qt queues onto the GUI thread."""
 
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
 
 from framesift.engine.catalog import Catalog
@@ -27,12 +29,13 @@ from framesift.engine.paths import os_path
 from framesift.engine.thumbs import ThumbCache, render_thumbnail
 
 
-class JobThread(QThread):
-    """Runs `fn(progress=cb, control=control)` off the GUI thread."""
+class JobThread(QObject):
+    """Runs `fn(progress=cb, control=control)` on a Python thread and reports through signals."""
 
     progress = Signal(dict)
     finished_ok = Signal(object)
     failed = Signal(str)
+    finished = Signal()  # always emitted last, after finished_ok or failed
 
     def __init__(
         self,
@@ -42,19 +45,51 @@ class JobThread(QThread):
         parent: QObject | None = None,
     ):
         super().__init__(parent)
-        self.fn = fn
+        self.fn: Callable[..., Any] | None = fn
         self.control = control or JobControl()
         self.result: Any = None
+        self._thread: threading.Thread | None = None
+        self._done = threading.Event()
 
-    def run(self) -> None:  # pragma: no cover - exercised through the GUI tests
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, name="framesift-job", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        fn = self.fn
+        assert fn is not None
         try:
-            self.result = self.fn(progress=self.progress.emit, control=self.control)
+            self.result = fn(progress=self.progress.emit, control=self.control)
             self.finished_ok.emit(self.result)
         except Cancelled:
             self.finished_ok.emit(None)
         except Exception as exc:
             traceback.print_exc()
             self.failed.emit(f"{type(exc).__name__}: {exc}")
+        finally:
+            self._done.set()
+            self.finished.emit()
+
+    def is_running(self) -> bool:
+        return self._thread is not None and not self._done.is_set()
+
+    def is_finished(self) -> bool:
+        return self._done.is_set()
+
+    def wait(self, timeout_ms: int | None = None) -> bool:
+        """Join the thread; True when it is not running any more."""
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(None if timeout_ms is None else timeout_ms / 1000)
+        return not thread.is_alive()
+
+    def release(self) -> None:
+        """Drop the job function and its result once the GUI has consumed them."""
+        self.fn = None
+        self.result = None
 
 
 class TaskPool:

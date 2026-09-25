@@ -60,6 +60,9 @@ class GuiWorkspace(QObject):
         self.image_loader = ImageLoader(self)
         self._jobs: dict[str, JobThread] = {}
         self._live_threads: list[JobThread] = []
+        # Finished jobs stay referenced until the workspace closes, so their Qt objects are
+        # released on the GUI thread at a known point instead of by a garbage collection.
+        self._retired: list[JobThread] = []
         self._actions = TaskPool(1, "framesift-action")  # one thread: actions stay ordered
         self._action_signals = _ActionSignals()
         self._action_signals.done.connect(self._on_action_done)
@@ -127,6 +130,7 @@ class GuiWorkspace(QObject):
             job.wait(10000)
         self._jobs.clear()
         self._live_threads.clear()
+        self._retired.clear()
         self.thumb_loader.cancel_all()
         self._actions.wait(10000)
         if self.ws is not None:
@@ -148,12 +152,10 @@ class GuiWorkspace(QObject):
     def run_job(self, kind: str, fn: Callable[..., Any]) -> JobThread | None:
         previous = self._jobs.get(kind)
         if previous is not None:
-            if previous.isRunning() and not previous.isFinished():
+            if not previous.is_finished():
                 return None
             previous.wait(5000)
             self._jobs.pop(kind, None)
-        # No Qt parent: the Python reference in _jobs keeps the thread alive until it has
-        # fully finished (a parented QThread collected mid-shutdown crashed on Windows).
         thread = JobThread(fn)
         thread.progress.connect(lambda data, k=kind: self.job_progress.emit(k, data))
         thread.finished_ok.connect(lambda result, k=kind: self._job_done(k, result))
@@ -169,6 +171,8 @@ class GuiWorkspace(QObject):
             self._jobs.pop(kind, None)
         if thread in self._live_threads:
             self._live_threads.remove(thread)
+            thread.release()
+            self._retired.append(thread)
 
     def _job_done(self, kind: str, result: Any) -> None:
         self.job_finished.emit(kind, result)
@@ -179,7 +183,7 @@ class GuiWorkspace(QObject):
 
     def job(self, kind: str) -> JobThread | None:
         thread = self._jobs.get(kind)
-        if thread is not None and thread.isFinished():
+        if thread is not None and thread.is_finished():
             return None
         return thread
 
