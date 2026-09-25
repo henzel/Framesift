@@ -693,15 +693,18 @@ project. The owner chose the first option (§23).
   `.dmg` (`hdiutil`), Windows `.zip`, Linux `.AppImage` (`appimagetool`). Artifacts:
   `Framesift-<ver>-macos-arm64.dmg`, `-macos-x86_64.dmg`, `-windows-x64.zip`,
   `-linux-x86_64.AppImage`.
-* **External binaries**: ffmpeg/ffprobe from BtbN's `*-lgpl` static builds for Windows
-  and Linux; for macOS, FFmpeg is compiled in the release workflow from source with
-  `--disable-gpl --disable-nonfree --enable-videotoolbox` (cached per version).
-  exiftool: the official Windows executable (Oliver Betz build preferred, no temp
-  extraction) and the Perl distribution for macOS/Linux, run with the system `perl`
-  (present on macOS and practically every Linux); if `perl` is missing the app
-  degrades to "RAW previews unavailable".
-* **CI (`ci.yml`)**: on every PR, matrix ubuntu/windows/macos × Python 3.12: ruff, mypy
-  (engine), pytest with `QT_QPA_PLATFORM=offscreen`; ffmpeg installed on runners.
+* **External binaries** (`packaging/fetch_binaries.py`): ffmpeg/ffprobe from BtbN's
+  `master-latest-*-lgpl` static builds for Windows and Linux (the `latest` release only
+  carries master snapshots; they are ≥ 7.1 and decode HEIF grids, verified); for macOS,
+  FFmpeg 7.1.1 is compiled in the release workflow from source with `--disable-gpl
+  --disable-nonfree --enable-videotoolbox` (cached per version). exiftool: the version is
+  read from `exiftool.org/ver.txt` at build time; the official Windows 64-bit package and
+  the Perl distribution for macOS/Linux, run with the system `perl` (present on macOS and
+  practically every Linux); if `perl` is missing the app degrades to "RAW previews
+  unavailable".
+* **CI (`ci.yml`)**: on every PR, matrix ubuntu/windows/macos × Python 3.12 with the
+  `gui` extra: ruff, mypy (engine + CLI), pytest with `QT_QPA_PLATFORM=offscreen`; ffmpeg
+  from apt / brew / the BtbN LGPL build on Windows.
 * **Release (`release.yml`)**: on tag `v*`: four bundles (macOS arm64 on `macos-14`,
   Intel on the current Intel runner label), Docker buildx for amd64+arm64 → GHCR,
   draft GitHub Release with the CHANGELOG section attached.

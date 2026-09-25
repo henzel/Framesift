@@ -73,6 +73,8 @@ def ffmpeg_version() -> tuple[int, int] | None:
     first = out.split("\n", 1)[0]
     parts = first.split()
     for token in parts:
+        if token.startswith("N-"):  # git master snapshot (BtbN "master-latest" builds)
+            return (99, 0)
         if token[:1].isdigit():
             nums = token.lstrip("n").split(".")
             try:
@@ -80,3 +82,9 @@ def ffmpeg_version() -> tuple[int, int] | None:
             except ValueError:
                 return None
     return None
+
+
+def ffmpeg_supports_heif() -> bool:
+    """FFmpeg ≥ 7.1 demuxes HEIF/HEIC (including tiled grids)."""
+    version = ffmpeg_version()
+    return version is not None and version >= (7, 1)

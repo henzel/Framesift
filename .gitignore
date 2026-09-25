@@ -17,6 +17,7 @@ _framesift_delete/
 
 # Packaging outputs
 packaging/out/
+packaging/bin/
 *.dmg
 *.AppImage
 

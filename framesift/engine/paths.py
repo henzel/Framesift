@@ -147,7 +147,10 @@ def _volume_info_windows(p: Path) -> VolumeInfo:  # pragma: no cover - Windows o
     if text.startswith("\\\\"):
         return VolumeInfo(text, "unc", True)
     drive = os.path.splitdrive(text)[0] + "\\"
-    kind = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(drive))  # type: ignore[attr-defined]
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return VolumeInfo(drive, "unknown", False)
+    kind = windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(drive))
     return VolumeInfo(
         drive, {4: "remote", 3: "fixed", 2: "removable"}.get(kind, "unknown"), kind == 4
     )
