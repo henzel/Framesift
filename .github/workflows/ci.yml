@@ -37,10 +37,10 @@ jobs:
         run: brew install ffmpeg
       - name: ffmpeg (Windows, LGPL build)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
           python packaging/fetch_binaries.py --platform windows --skip-exiftool
-          echo "$PWD/packaging/bin/windows" >> "$GITHUB_PATH"
+          "${{ github.workspace }}\packaging\bin\windows" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Lint
         run: ruff check framesift tests && ruff format --check framesift tests
       - name: Type check (engine and CLI)

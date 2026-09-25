@@ -59,7 +59,9 @@ def test_keep_files_are_not_candidates(classified) -> None:
 
 
 def test_first_category_wins_and_also_is_recorded(classified) -> None:
-    catalog, *_ = classified
+    catalog, _roots, manifest, _cfg, _stats = classified
+    if not manifest["short_videos"]:
+        pytest.skip("ffmpeg not available: no videos in the dataset")
     row = next(r for r in catalog.candidates(1) if r["f_rel_path"] == "2020/short.mp4")
     assert row["category"] == "short_videos"
     assert "no_camera_media" in json.loads(row["also"])

@@ -94,11 +94,58 @@ def exiftool_version() -> str:
     return text
 
 
+def _first_available(urls: list[str]) -> bytes | None:
+    for url in urls:
+        try:
+            return download(url)
+        except Exception as exc:  # 404, timeouts, TLS: try the next mirror
+            print(f"  ({exc})")
+    return None
+
+
+def _extract_perl_dist(data: bytes, out: Path) -> bool:
+    """Unpack the exiftool script and lib/ from a Perl distribution tarball (exiftool.org or GitHub)."""
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+        found = False
+        for member in tf.getmembers():
+            parts = Path(member.name).parts[1:]
+            if not parts or not member.isfile():
+                continue
+            extracted = tf.extractfile(member)
+            if extracted is None:
+                continue
+            if parts[0] == "exiftool" and len(parts) == 1:
+                target = out / "exiftool"
+                target.write_bytes(extracted.read())
+                target.chmod(0o755)
+                found = True
+            elif parts[0] == "lib":
+                target = out.joinpath(*parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(extracted.read())
+            elif parts[0] in ("README", "LICENSE") and len(parts) == 1:
+                (out / f"{parts[0]}-exiftool.txt").write_bytes(extracted.read())
+        return found
+
+
 def fetch_exiftool(plat: str, arch: str, out: Path) -> None:
-    ver = exiftool_version()
+    """Best effort: exiftool is optional at runtime, so a missing download is a warning, not an error."""
+    try:
+        ver = exiftool_version()
+    except Exception as exc:
+        print(f"  WARNING: cannot resolve the exiftool version ({exc}); bundling without exiftool")
+        return
     if plat == "windows":
         asset = f"exiftool-{ver}_64.zip"
-        data = download(EXIFTOOL_SITE + asset)
+        data = _first_available(
+            [
+                EXIFTOOL_SITE + asset,
+                f"https://sourceforge.net/projects/exiftool/files/{asset}/download",
+            ]
+        )
+        if data is None:
+            print("  WARNING: exiftool for Windows not available; bundling without exiftool")
+            return
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             for member in zf.namelist():
                 path = Path(member)
@@ -111,28 +158,16 @@ def fetch_exiftool(plat: str, arch: str, out: Path) -> None:
                     target.write_bytes(zf.read(member))
     else:
         asset = f"Image-ExifTool-{ver}.tar.gz"
-        data = download(EXIFTOOL_SITE + asset)
-        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
-            for member in tf.getmembers():
-                parts = Path(member.name).parts[1:]
-                if not parts:
-                    continue
-                if parts[0] == "exiftool" and member.isfile():
-                    extracted = tf.extractfile(member)
-                    assert extracted is not None
-                    target = out / "exiftool"
-                    target.write_bytes(extracted.read())
-                    target.chmod(0o755)
-                elif parts[0] == "lib" and member.isfile():
-                    extracted = tf.extractfile(member)
-                    assert extracted is not None
-                    target = out.joinpath(*parts)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(extracted.read())
-                elif parts[0] in ("README", "LICENSE") and member.isfile():
-                    extracted = tf.extractfile(member)
-                    assert extracted is not None
-                    (out / f"{parts[0]}-exiftool.txt").write_bytes(extracted.read())
+        data = _first_available(
+            [
+                EXIFTOOL_SITE + asset,
+                f"https://sourceforge.net/projects/exiftool/files/{asset}/download",
+                f"https://github.com/exiftool/exiftool/archive/refs/tags/{ver}.tar.gz",
+            ]
+        )
+        if data is None or not _extract_perl_dist(data, out):
+            print("  WARNING: exiftool distribution not available; bundling without exiftool")
+            return
     print(f"  exiftool {ver} -> {out}")
 
 
