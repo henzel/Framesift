@@ -3,7 +3,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-    branches: ["claude/new-session-4s423u"]  # temporary: validate the builds before the first tag
   workflow_dispatch:
 
 permissions:
