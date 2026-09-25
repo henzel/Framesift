@@ -1,12 +1,14 @@
-# PhotoSift — Architecture
+# Framesift — Architecture
 
-Status: **draft for owner review** (step 1 of the specification). Nothing below is
-implemented yet; this document is the contract for milestones M1–M5.
+Status: **approved by the owner on 2026-09-25** (name Framesift, license MIT with `pi-heif`
+pinned and an ffmpeg fallback). This document is the contract for milestones M1–M5 and is
+updated whenever an implementation decision deviates from it.
 
-> **Naming.** "PhotoSift" is used by several existing products (a Windows app in the
-> Microsoft Store, RL Vision's PhotoSift, and three GitHub projects). The PyPI name is
-> free. The owner picks the final name; the placeholder `photosift` (package, CLI,
-> `.photosift` catalog folder, Docker image) is replaced everywhere before M1 code lands.
+> **Naming.** The project started as "PhotoSift", a name already used by several products
+> (a Windows app in the Microsoft Store, RL Vision's PhotoSift, three GitHub projects).
+> The owner chose **Framesift** (PyPI name free, no products found). Package `framesift`,
+> CLI `framesift`, catalog folder `.framesift`, default folders `_framesift_review` and
+> `_framesift_delete`, Docker image `ghcr.io/<owner>/framesift`.
 
 Where the specification is silent, the decision taken here is marked **[D]** and
 collected again in §21. Interpretations of ambiguous spec points are marked **[I]**.
@@ -15,7 +17,7 @@ collected again in §21. Interpretations of ambiguous spec points are marked **[
 
 ## 1. Scope and hard rules
 
-PhotoSift is a free desktop tool (macOS, Windows, Linux) plus a headless CLI for
+Framesift is a free desktop tool (macOS, Windows, Linux) plus a headless CLI for
 sorting large phone-photo archives (200+ GB, 100k+ files, possibly on SMB). It has
 three folders (Source, Review, Delete), a manual review mode, a group mode, an
 automatic classifier that stages junk candidates into Review, and a folder browser.
@@ -41,20 +43,20 @@ Photos / Google Photos / Lightroom integration, editing.
 ```
             ┌────────────────────┐        ┌────────────────────┐
             │  GUI  (PySide6)    │        │  CLI  (typer)      │
-            │  photosift.gui     │        │  photosift.cli     │
+            │  framesift.gui     │        │  framesift.cli     │
             └─────────┬──────────┘        └─────────┬──────────┘
                       │  thin wrappers: no business logic
                       └──────────────┬───────────────┘
                               ┌──────▼──────┐
                               │   engine    │   pure Python, no Qt
-                              │ photosift.  │   jobs, catalog, scanner,
+                              │ framesift.  │   jobs, catalog, scanner,
                               │   engine    │   metadata, analysis,
                               └──────┬──────┘   classify, apply, undo, purge
           ┌──────────────────────────┼───────────────────────────┐
           ▼                          ▼                           ▼
    Source folder             Review folder                 Delete folder
    (never deleted from,      <Review>/<category>/...       <Delete>/<source-relative path>
-    only moved out of)       <Review>/.photosift/          
+    only moved out of)       <Review>/.framesift/          
                                catalog.db  lock  reports/  logs/  progress.json
 ```
 
@@ -62,13 +64,13 @@ Deployment scenario that drives the design: the archive lives on a Synology NAS.
 heavy pipeline (`scan`, `classify`, `apply`) runs in Docker **on the NAS** against the
 local disk; the GUI on a Mac opens the same catalog over SMB and does the human part
 (manual mode, group mode, undo, purge). Both sides see one catalog in
-`<Review>/.photosift/`, so paths inside the catalog are stored relative to the three
+`<Review>/.framesift/`, so paths inside the catalog are stored relative to the three
 roots and each host records its own absolute root paths (§6.4).
 
 ## 3. Repository layout
 
 ```
-photosift/                     Python package (src layout not used: keeps PyInstaller simple)
+framesift/                     Python package (src layout not used: keeps PyInstaller simple)
   __init__.py                  __version__
   engine/                      NO Qt imports allowed (enforced by a test)
     config.py                  RootsConfig, ClassifyConfig (thresholds + defaults), constants
@@ -106,7 +108,7 @@ photosift/                     Python package (src layout not used: keeps PyInst
     views/                     browser.py manual.py groups.py auto.py journal.py settings.py
     workers/                   QThread bridges to engine jobs; ThumbnailLoader (QThreadPool)
     media/                     ImageView (QGraphicsView), VideoView (QMediaPlayer), FfmpegFrameView
-    i18n/                      photosift_ru.ts / .qm (UI strings)
+    i18n/                      framesift_ru.ts / .qm (UI strings)
   resources/                   icons (own, MIT)
 tests/
   fixtures/make_dataset.py     synthetic dataset generator (Pillow + ffmpeg)
@@ -122,8 +124,8 @@ THIRD_PARTY_LICENSES.md  pyproject.toml
 ```
 
 Rules: `engine` imports nothing from `gui`/`cli`; `gui` and `cli` call the engine only
-through `photosift.engine.api` (a small façade: `open_catalog`, `run_job`, `plan`,
-`apply`, `undo`, `purge`, `list_*`). A unit test asserts that `import photosift.engine`
+through `framesift.engine.api` (a small façade: `open_catalog`, `run_job`, `plan`,
+`apply`, `undo`, `purge`, `list_*`). A unit test asserts that `import framesift.engine`
 does not import `PySide6`.
 
 ## 4. Core concepts
@@ -168,7 +170,7 @@ once per file version (size+mtime) and reused.
 
 ### 6.1 Location and access
 
-* Path: `<Review>/.photosift/catalog.db`. Next to it: `lock`, `progress.json`,
+* Path: `<Review>/.framesift/catalog.db`. Next to it: `lock`, `progress.json`,
   `reports/`, `logs/`, `tmp/`.
 * `sqlite3` from the standard library, `PRAGMA foreign_keys=ON`, `synchronous=NORMAL`,
   `cache_size=-65536` (64 MB), `temp_store=MEMORY`.
@@ -180,7 +182,7 @@ once per file version (size+mtime) and reused.
 * Writes are batched: scan upserts in transactions of 500 rows; journal rows are
   committed one logical operation at a time (all files of one item), immediately after
   the filesystem operation succeeded.
-* **Single writer.** `<Review>/.photosift/lock` is created with `O_CREAT|O_EXCL` and
+* **Single writer.** `<Review>/.framesift/lock` is created with `O_CREAT|O_EXCL` and
   contains JSON `{host, pid, app, started, heartbeat}`. The owner refreshes `heartbeat`
   every 30 s. A lock whose heartbeat is older than 10 min is stale and may be taken
   over (the GUI asks; the CLI needs `--force-lock`). While another host holds the lock,
@@ -212,7 +214,7 @@ CREATE TABLE files (
   root           TEXT NOT NULL CHECK (root IN ('source','review','delete')),
   rel_path       TEXT NOT NULL,           -- NFC, '/' separators, relative to the root
   rel_path_os    TEXT,                    -- exact on-disk form when it differs from NFC (NFD etc.)
-  origin_rel_path TEXT,                   -- source-relative path before PhotoSift moved it
+  origin_rel_path TEXT,                   -- source-relative path before Framesift moved it
   name           TEXT NOT NULL,           -- basename, NFC
   ext            TEXT NOT NULL,           -- lower-case, no dot
   kind           TEXT NOT NULL,           -- photo | raw | video | sidecar | other
@@ -343,7 +345,7 @@ is written before any migration.
 
 The catalog knows the Review root implicitly (its own parent directory). For Source and
 Delete it stores, in `meta.source_layout`, the layout relative to Review when possible
-(`{"source": "..", "delete": "../_photosift_delete"}`, which is the default layout) and,
+(`{"source": "..", "delete": "../_framesift_delete"}`, which is the default layout) and,
 in `hosts`, each machine's absolute paths. Resolution order on open: `hosts` row for
 this hostname → relative layout → ask the user (GUI) / require `--source` (CLI).
 `--source`/`--delete-dir` given explicitly always win and update `hosts`.
@@ -393,9 +395,9 @@ created with `mkdir(parents=True, exist_ok=True)`.
 ### 8.2 Cross volume
 
 `os.rename` raising `EXDEV` (or the up-front `st_dev` / Windows volume-path check) →
-`copy_verify`: stream-copy to `<dst>.photosift-part` while computing BLAKE3, `fsync`,
+`copy_verify`: stream-copy to `<dst>.framesift-part` while computing BLAKE3, `fsync`,
 `shutil.copystat` (mtime, permissions), re-read the copy and compare hashes, rename the
-temp file to `dst`, and only then `unlink` the source. Leftover `*.photosift-part`
+temp file to `dst`, and only then `unlink` the source. Leftover `*.framesift-part`
 files from a crash are removed at the next start and logged to `issues`. The move
 returns `method='copy_verify'`; the GUI warned about slowness at folder setup already.
 
@@ -416,7 +418,7 @@ basename. `journal.conflict=1` and an `issues` row record it.
   once it exceeds 240 characters; forward slashes are normalized.
 * Symlinks are not followed and not listed **[D]**.
 * Excluded from scanning: `@eaDir #recycle #snapshot .Trashes .Spotlight-V100 .fseventsd
-  $RECYCLE.BIN "System Volume Information" .photosift .thumbnails @Recycle`, the Review
+  $RECYCLE.BIN "System Volume Information" .framesift .thumbnails @Recycle`, the Review
   and Delete roots (wherever they are), `*.photoslibrary` and `*.lrdata` subtrees (with a
   warning). A Source that is, or is inside, a `*.photoslibrary` is refused. A folder
   containing `*.lrcat` produces a Lightroom warning only.
@@ -519,7 +521,7 @@ matching categories are stored in `candidates.also` and shown in the reason.
 | 4 | `short_videos` | medium | `duration_ms < short_video_seconds·1000` (default 3), not a Live Photo companion | — |
 | 5 | `no_camera_media` | low | photo/video with `camera_known=1` and empty Make and Model and no Android/Apple video keys, not matched above | — |
 | 6 | `junk` | high | name in `.DS_Store ._* Thumbs.db desktop.ini`; `size == 0`; `structure_ok = 0` or `decode_error`; orphan `.AAE` (no sibling with the same basename); option `move_all_aae` (off) | — |
-| 7 | `blurry_dark` | low | `sharpness < blur_threshold` (default 4.0 on the 256 px representation) OR (`brightness < 0.03` AND `dark_p99 < 0.12`) | — |
+| 7 | `blurry_dark` | low | `sharpness < blur_threshold` (default 12.0, Laplacian variance on the 0–255 scale of the 256 px representation) OR (`brightness < 0.03` AND `dark_p99 < 0.12`) | — |
 | 8 | `similar` | medium | photos with `date_taken`, sorted; pairs within `similar_window_s` (default ±60) and Hamming(pHash) ≤ `similar_distance` (default 6 of 64) → union-find groups; original/edited pairs and companions are never grouped with each other | keeper = highest sharpness, then most pixels |
 
 The phone screen table (`config.py`) lists iPhone resolutions (iPhone 4 … 17 families,
@@ -548,7 +550,7 @@ and as GUI sliders, and re-evaluation after a slider change needs no filesystem 
 
 ## 13. Thumbnails, previews and decoding
 
-* Cache root: `platformdirs.user_cache_dir("photosift")` — never inside user folders.
+* Cache root: `platformdirs.user_cache_dir("framesift")` — never inside user folders.
   Layout `thumbs/<catalog_uuid>/<id % 256>/<id>.jpg`, JPEG q85, 320 px long side;
   index in a local SQLite `thumbs/index.db` (`catalog_uuid, file_id, size, mtime_ns,
   bytes, last_access`). LRU eviction to the configured limit (default 2 GB) runs in the
@@ -564,7 +566,7 @@ and as GUI sliders, and re-evaluation after a slider change needs no filesystem 
   **ffmpeg fallback** (FFmpeg ≥ 7.1 demuxes HEIF incl. tiled grids and decodes HEVC with
   its native LGPL decoder). Both paths are tested. See §17 for why not pillow-heif.
 
-## 14. GUI (`photosift.gui`)
+## 14. GUI (`framesift.gui`)
 
 * PySide6 widgets, Fusion style on Windows/Linux, native on macOS; light/dark from
   `QStyleHints.colorScheme` (Qt ≥ 6.5) with a palette pair; i18n via `QTranslator`
@@ -602,20 +604,20 @@ and as GUI sliders, and re-evaluation after a slider change needs no filesystem 
 * **Purge**: dialog with count and size; local volume → `send2trash`; network volume →
   the irreversible warning naming the NAS shared-folder recycle bin and snapshots.
 
-## 15. CLI (`photosift.cli`)
+## 15. CLI (`framesift.cli`)
 
 ```
-photosift scan     --source DIR [--review DIR] [--delete-dir DIR] [--recursive/--no-recursive]
+framesift scan     --source DIR [--review DIR] [--delete-dir DIR] [--recursive/--no-recursive]
                    [--workers N] [--low-priority] [--log-file FILE] [--json]
-photosift classify [--catalog DIR] [--categories a,b,…] [--short-video-seconds 3]
-                   [--similar-window 60] [--similar-distance 6] [--blur-threshold 4.0]
+framesift classify [--catalog DIR] [--categories a,b,…] [--short-video-seconds 3]
+                   [--similar-window 60] [--similar-distance 6] [--blur-threshold 12.0]
                    [--dark-threshold 0.03] [--move-all-aae] [--workers N] [--low-priority]
-photosift report   [--catalog DIR] [--json] [--out DIR]
-photosift apply    [--catalog DIR] [--categories …] [--live-photos] [--yes]     # dry-run by default
-photosift undo     [--catalog DIR] (--last | --session ID | --category NAME | --all) [--yes]
-photosift purge    [--catalog DIR] [--yes]                                      # dry-run by default
-photosift status   [--catalog DIR]          # counts, last jobs, lock owner, catalog version
-photosift gui      [DIR]                    # launches the GUI when the gui extra is installed
+framesift report   [--catalog DIR] [--json] [--out DIR]
+framesift apply    [--catalog DIR] [--categories …] [--live-photos] [--yes]     # dry-run by default
+framesift undo     [--catalog DIR] (--last | --session ID | --category NAME | --all) [--yes]
+framesift purge    [--catalog DIR] [--yes]                                      # dry-run by default
+framesift status   [--catalog DIR]          # counts, last jobs, lock owner, catalog version
+framesift gui      [DIR]                    # launches the GUI when the gui extra is installed
 ```
 
 `--catalog` is the Review folder (or the `.db` path); with only `--source` the default
@@ -624,17 +626,17 @@ too, for symmetry with `apply` **[D]**.
 
 Output discipline (agents will drive this): stdout shows totals and up to 5 examples per
 category; `--json` prints one JSON document; the full lists go to
-`<Review>/.photosift/reports/<UTC timestamp>-<command>/report.json` plus one CSV per
-category; progress goes to `<Review>/.photosift/logs/photosift-<date>.log` (or
+`<Review>/.framesift/reports/<UTC timestamp>-<command>/report.json` plus one CSV per
+category; progress goes to `<Review>/.framesift/logs/framesift-<date>.log` (or
 `--log-file`), one line every 2 s, `tail -f`-friendly. Exit codes: 0 ok, 1 error,
 2 usage, 3 lock held, 4 refused (Apple Photos library), 5 partial (some files skipped).
 
 ## 16. NAS and Docker
 
-* Image `ghcr.io/<owner>/photosift:<tag>` (and `:latest`, `:edge`), `linux/amd64` +
+* Image `ghcr.io/<owner>/framesift:<tag>` (and `:latest`, `:edge`), `linux/amd64` +
   `linux/arm64`, base `python:3.12-slim`, CLI only (no Qt), with ffmpeg/ffprobe (BtbN
   LGPL static build, pinned, checksum verified) and exiftool (Debian
-  `libimage-exiftool-perl`). Entrypoint `photosift`.
+  `libimage-exiftool-perl`). Entrypoint `framesift`.
 * Run as the user's uid:gid (`--user 1026:100` on Synology), mount the shared folder,
   `--low-priority` inside plus `--cpu-shares` outside. README (M5) gives Container
   Manager and SSH `docker run` recipes.
@@ -656,7 +658,7 @@ Versions are the current PyPI releases (checked 2026-09-25).
 | psutil | 7.2 | BSD-3 | volume types, nice/ionice |
 | send2trash | 2.1 | BSD-3 | system trash for purge |
 | platformdirs | 4.11 | MIT | cache/config dirs |
-| PySide6 | 6.11 | LGPL-3.0 (dynamic linking; Qt Multimedia's FFmpeg is an LGPL build) | GUI only (`photosift[gui]`) |
+| PySide6 | 6.11 | LGPL-3.0 (dynamic linking; Qt Multimedia's FFmpeg is an LGPL build) | GUI only (`framesift[gui]`) |
 | pyobjc-framework-Cocoa | 11.x | MIT | macOS only: NSFileManager trash API for send2trash |
 | ffmpeg / ffprobe | 7.1+ | LGPL-2.1+ (builds configured without `--enable-gpl`/`--enable-nonfree`) | video thumbnails, ffprobe fallback, HEIC fallback, playback fallback |
 | exiftool | 13.x | Perl Artistic-1.0 / GPL-1.0+ (dual); separate process | optional: RAW metadata/previews, metadata fallback |
@@ -679,13 +681,13 @@ for Python 3.10–3.14 on all our targets. The plan above pins it and keeps the 
 HEIC path as a tested fallback, so the app does not depend on pi-heif's future; if a
 newer libheif is ever needed, pillow-heif's own build scripts can produce a
 decoder-only wheel in our CI. The alternative is `pillow-heif` + GPL-3.0 for the whole
-project. The owner decides (see §23).
+project. The owner chose the first option (§23).
 
 ## 18. Packaging and CI
 
 * **PyInstaller one-dir** bundles from `packaging/pyinstaller/*.spec`; macOS `.app` in a
   `.dmg` (`hdiutil`), Windows `.zip`, Linux `.AppImage` (`appimagetool`). Artifacts:
-  `PhotoSift-<ver>-macos-arm64.dmg`, `-macos-x86_64.dmg`, `-windows-x64.zip`,
+  `Framesift-<ver>-macos-arm64.dmg`, `-macos-x86_64.dmg`, `-windows-x64.zip`,
   `-linux-x86_64.AppImage`.
 * **External binaries**: ffmpeg/ffprobe from BtbN's `*-lgpl` static builds for Windows
   and Linux; for macOS, FFmpeg is compiled in the release workflow from source with
@@ -775,10 +777,8 @@ project. The owner decides (see §23).
 
 Each milestone ends with a commit and a short report (done / verified / left).
 
-## 23. Open questions for the owner
+## 23. Owner decisions
 
-1. **Name**: keep `PhotoSift` despite the collisions, or pick one of the proposed
-   alternatives (see the review message).
-2. **License path**: MIT with `pi-heif` pinned + ffmpeg fallback (recommended, §17), or
-   GPL-3.0 with `pillow-heif`.
-3. Everything else in §21 is decided here unless the owner objects.
+1. **Name**: Framesift (decided 2026-09-25).
+2. **License**: MIT, with `pi-heif` pinned and the ffmpeg HEIC fallback (§17).
+3. Everything in §21 is accepted.
