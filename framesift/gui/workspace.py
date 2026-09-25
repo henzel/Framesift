@@ -60,6 +60,7 @@ class GuiWorkspace(QObject):
         self.thumb_loader = ThumbnailLoader(self.thumb_cache, self)
         self.image_loader = ImageLoader(self)
         self._jobs: dict[str, JobThread] = {}
+        self._live_threads: list[JobThread] = []
         self._actions = QThreadPool(self)
         self._actions.setMaxThreadCount(1)
         self._action_signals = _ActionSignals()
@@ -124,8 +125,10 @@ class GuiWorkspace(QObject):
     def close(self) -> None:
         for job in list(self._jobs.values()):
             job.control.cancel.set()
-            job.wait(5000)
+        for job in list(self._live_threads):
+            job.wait(10000)
         self._jobs.clear()
+        self._live_threads.clear()
         self.thumb_loader.cancel_all()
         self._actions.waitForDone(10000)
         if self.ws is not None:
@@ -145,27 +148,42 @@ class GuiWorkspace(QObject):
 
     # ------------------------------------------------------------------ jobs
     def run_job(self, kind: str, fn: Callable[..., Any]) -> JobThread | None:
-        if kind in self._jobs and self._jobs[kind].isRunning():
-            return None
-        thread = JobThread(fn, parent=self)
+        previous = self._jobs.get(kind)
+        if previous is not None:
+            if previous.isRunning() and not previous.isFinished():
+                return None
+            previous.wait(5000)
+            self._jobs.pop(kind, None)
+        # No Qt parent: the Python reference in _jobs keeps the thread alive until it has
+        # fully finished (a parented QThread collected mid-shutdown crashed on Windows).
+        thread = JobThread(fn)
         thread.progress.connect(lambda data, k=kind: self.job_progress.emit(k, data))
         thread.finished_ok.connect(lambda result, k=kind: self._job_done(k, result))
         thread.failed.connect(lambda msg, k=kind: self._job_fail(k, msg))
+        thread.finished.connect(lambda k=kind, t=thread: self._thread_finished(k, t))
         self._jobs[kind] = thread
+        self._live_threads.append(thread)
         thread.start()
         return thread
 
+    def _thread_finished(self, kind: str, thread: JobThread) -> None:
+        if self._jobs.get(kind) is thread:
+            self._jobs.pop(kind, None)
+        if thread in self._live_threads:
+            self._live_threads.remove(thread)
+
     def _job_done(self, kind: str, result: Any) -> None:
-        self._jobs.pop(kind, None)
         self.job_finished.emit(kind, result)
         self.changed.emit()
 
     def _job_fail(self, kind: str, message: str) -> None:
-        self._jobs.pop(kind, None)
         self.job_failed.emit(kind, message)
 
     def job(self, kind: str) -> JobThread | None:
-        return self._jobs.get(kind)
+        thread = self._jobs.get(kind)
+        if thread is not None and thread.isFinished():
+            return None
+        return thread
 
     def scan(self) -> JobThread | None:
         ws = self.ws
