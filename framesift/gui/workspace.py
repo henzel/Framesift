@@ -140,10 +140,9 @@ class GuiWorkspace(QObject):
         if getattr(self, "_shut", False):
             return
         self._shut = True
+        self.thumb_loader.shutdown()
+        self.image_loader.shutdown()
         self.close()
-        self.thumb_loader.pool.waitForDone(5000)
-        self.image_loader.pool.clear()
-        self.image_loader.pool.waitForDone(5000)
         self.thumb_cache.close()
 
     # ------------------------------------------------------------------ jobs

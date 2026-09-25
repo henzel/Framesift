@@ -86,6 +86,8 @@ class ThumbTask(QRunnable):
     def run(self) -> None:
         row = self.row
         file_id = int(row["id"])
+        if getattr(self.signals, "closing", False):
+            return
         try:
             data = self.cache.get(self.uuid, file_id, row["size"], row["mtime_ns"])
             if data is None:
@@ -97,9 +99,11 @@ class ThumbTask(QRunnable):
             img = QImage.fromData(data, "JPEG")
             if img.isNull():
                 raise DecodeError("bad thumbnail data")
-            self.signals.ready.emit(file_id, img)
+            if not getattr(self.signals, "closing", False):
+                self.signals.ready.emit(file_id, img)
         except Exception:
-            self.signals.failed.emit(file_id)
+            if not getattr(self.signals, "closing", False):
+                self.signals.failed.emit(file_id)
 
 
 class ThumbnailLoader(QObject):
@@ -132,6 +136,12 @@ class ThumbnailLoader(QObject):
         self.pool.clear()
         self.pending.clear()
 
+    def shutdown(self, timeout_ms: int = 30000) -> None:
+        """Stop feeding results into the GUI and wait for running tasks to finish."""
+        self.signals.closing = True  # type: ignore[attr-defined]
+        self.pool.clear()
+        self.pool.waitForDone(timeout_ms)
+
 
 class ImageSignals(QObject):
     ready = Signal(int, QImage, bool)  # file id, image, is_full_resolution
@@ -161,6 +171,8 @@ class ImageTask(QRunnable):
         ) = signals, file_id, path, fmt, ext, orientation, max_side
 
     def run(self) -> None:
+        if getattr(self.signals, "closing", False):
+            return
         try:
             im = open_full(self.path, self.fmt, self.ext, self.orientation)
             full = True
@@ -168,9 +180,11 @@ class ImageTask(QRunnable):
                 im = im.copy()
                 im.thumbnail((self.max_side, self.max_side), Image.Resampling.BILINEAR)
                 full = False
-            self.signals.ready.emit(self.file_id, pil_to_qimage(im), full)
+            if not getattr(self.signals, "closing", False):
+                self.signals.ready.emit(self.file_id, pil_to_qimage(im), full)
         except Exception as exc:
-            self.signals.failed.emit(self.file_id, str(exc))
+            if not getattr(self.signals, "closing", False):
+                self.signals.failed.emit(self.file_id, str(exc))
 
 
 class ImageLoader(QObject):
@@ -189,6 +203,11 @@ class ImageLoader(QObject):
             )
         )
 
+    def shutdown(self, timeout_ms: int = 30000) -> None:
+        self.signals.closing = True  # type: ignore[attr-defined]
+        self.pool.clear()
+        self.pool.waitForDone(timeout_ms)
+
     def request(
         self,
         file_id: int,
@@ -199,6 +218,8 @@ class ImageLoader(QObject):
         *,
         max_side: int | None,
     ) -> None:
+        if getattr(self.signals, "closing", False):
+            return
         key = (file_id, max_side is None)
         if key in self.pending:
             return
