@@ -45,8 +45,11 @@ jobs:
         run: ruff check framesift tests && ruff format --check framesift tests
       - name: Type check (engine and CLI)
         run: mypy framesift/engine framesift/cli
-      - name: Tests
+      - name: Tests (engine and CLI)
+        run: python -m pytest -q -p no:cacheprovider tests/unit tests/integration
+      - name: Tests (GUI, offscreen)
+        if: ${{ !cancelled() }}
         env:
           QT_QPA_PLATFORM: offscreen
           QT_LOGGING_RULES: "qt.multimedia.*=false"
-        run: python -m pytest -q -p no:cacheprovider
+        run: python -m pytest -q -p no:cacheprovider tests/gui

@@ -792,6 +792,9 @@ only the columns the rules need).
 23. Manual-mode actions run on a single background thread in submission order; the view advances
     immediately and reconciles on failure (keeps "next item < 100 ms" on slow network volumes).
 24. The session counters are net figures: an item restored later no longer counts as "to delete".
+25. Short GUI tasks (thumbnails, image decodes, file actions) run on plain Python thread pools
+    (`concurrent.futures`), not QThreadPool: Qt deleting Python `QRunnable` subclasses from its pool
+    threads corrupted the heap under PySide6 6.11. Results still reach the GUI as queued Qt signals.
 
 ## 22. Milestones
 

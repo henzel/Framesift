@@ -1,14 +1,22 @@
-"""Threads: engine jobs in a QThread, thumbnails and image decodes in a QThreadPool."""
+"""Threads: engine jobs in a QThread; thumbnails, image decodes and actions in Python pools.
+
+Short tasks run on `TaskPool` (a thin wrapper over `concurrent.futures.ThreadPoolExecutor`)
+instead of QThreadPool: Python subclasses of QRunnable are deleted by Qt from its pool
+threads, which corrupted the heap under PySide6 6.11 (crashes on Windows and, rarely, Linux).
+Results reach the GUI through Qt signals, which Qt queues onto the GUI thread."""
 
 from __future__ import annotations
 
+import threading
 import traceback
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import wait as wait_futures
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from PySide6.QtCore import QObject, QRunnable, QThread, QThreadPool, Signal
+from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtGui import QImage
 
 from framesift.engine.catalog import Catalog
@@ -49,6 +57,54 @@ class JobThread(QThread):
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
+class TaskPool:
+    """A bounded pool of plain Python threads with QThreadPool-like clear/wait semantics."""
+
+    def __init__(self, threads: int, name: str):
+        self._executor = ThreadPoolExecutor(max_workers=max(1, threads), thread_name_prefix=name)
+        self._futures: set[Future[None]] = set()
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def start(self, fn: Callable[[], None]) -> bool:
+        with self._lock:
+            if self._closed:
+                return False
+            future = self._executor.submit(fn)
+            self._futures.add(future)
+        future.add_done_callback(self._forget)
+        return True
+
+    def _forget(self, future: Future[None]) -> None:
+        with self._lock:
+            self._futures.discard(future)
+
+    def clear(self) -> None:
+        """Drop the tasks that have not started yet."""
+        with self._lock:
+            futures = list(self._futures)
+        for future in futures:
+            future.cancel()
+
+    def wait(self, timeout_ms: int | None = None) -> bool:
+        """Wait for the tasks submitted so far; True when all of them finished in time."""
+        with self._lock:
+            futures = list(self._futures)
+        if not futures:
+            return True
+        timeout = None if timeout_ms is None else timeout_ms / 1000
+        _done, pending = wait_futures(futures, timeout=timeout)
+        return not pending
+
+    def shutdown(self, timeout_ms: int = 30000) -> bool:
+        with self._lock:
+            self._closed = True
+        self.clear()
+        finished = self.wait(timeout_ms)
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        return finished
+
+
 def pil_to_qimage(im: Image.Image) -> QImage:
     if im.mode != "RGB":
         im = im.convert("RGB")
@@ -62,7 +118,7 @@ class ThumbSignals(QObject):
     failed = Signal(int)
 
 
-class ThumbTask(QRunnable):
+class ThumbTask:
     def __init__(
         self,
         signals: ThumbSignals,
@@ -72,7 +128,6 @@ class ThumbTask(QRunnable):
         row: dict[str, Any],
         meta: dict[str, Any],
     ):
-        super().__init__()
         self.signals, self.cache, self.uuid, self.roots, self.row, self.meta = (
             signals,
             cache,
@@ -81,7 +136,6 @@ class ThumbTask(QRunnable):
             row,
             meta,
         )
-        self.setAutoDelete(True)
 
     def run(self) -> None:
         row = self.row
@@ -113,8 +167,7 @@ class ThumbnailLoader(QObject):
         super().__init__(parent)
         self.cache = cache
         self.signals = ThumbSignals()
-        self.pool = QThreadPool(self)
-        self.pool.setMaxThreadCount(threads)
+        self.pool = TaskPool(threads, "framesift-thumb")
         self.pending: set[int] = set()
         self.signals.ready.connect(self._done)
         self.signals.failed.connect(self._done)
@@ -127,7 +180,8 @@ class ThumbnailLoader(QObject):
             return
         self.pending.add(file_id)
         task = ThumbTask(self.signals, self.cache, catalog.uuid, roots, row, meta)
-        self.pool.start(task)
+        if not self.pool.start(task.run):
+            self.pending.discard(file_id)
 
     def _done(self, file_id: int, *_args: Any) -> None:
         self.pending.discard(file_id)
@@ -139,8 +193,7 @@ class ThumbnailLoader(QObject):
     def shutdown(self, timeout_ms: int = 30000) -> None:
         """Stop feeding results into the GUI and wait for running tasks to finish."""
         self.signals.closing = True  # type: ignore[attr-defined]
-        self.pool.clear()
-        self.pool.waitForDone(timeout_ms)
+        self.pool.shutdown(timeout_ms)
 
 
 class ImageSignals(QObject):
@@ -148,7 +201,7 @@ class ImageSignals(QObject):
     failed = Signal(int, str)
 
 
-class ImageTask(QRunnable):
+class ImageTask:
     def __init__(
         self,
         signals: ImageSignals,
@@ -159,7 +212,6 @@ class ImageTask(QRunnable):
         orientation: int | None,
         max_side: int | None,
     ):
-        super().__init__()
         (
             self.signals,
             self.file_id,
@@ -193,8 +245,7 @@ class ImageLoader(QObject):
     def __init__(self, parent: QObject | None = None, threads: int = 3):
         super().__init__(parent)
         self.signals = ImageSignals()
-        self.pool = QThreadPool(self)
-        self.pool.setMaxThreadCount(threads)
+        self.pool = TaskPool(threads, "framesift-image")
         self.pending: set[tuple[int, bool]] = set()
         self.signals.ready.connect(lambda fid, _img, full: self.pending.discard((fid, full)))
         self.signals.failed.connect(
@@ -205,8 +256,7 @@ class ImageLoader(QObject):
 
     def shutdown(self, timeout_ms: int = 30000) -> None:
         self.signals.closing = True  # type: ignore[attr-defined]
-        self.pool.clear()
-        self.pool.waitForDone(timeout_ms)
+        self.pool.shutdown(timeout_ms)
 
     def request(
         self,
@@ -224,4 +274,6 @@ class ImageLoader(QObject):
         if key in self.pending:
             return
         self.pending.add(key)
-        self.pool.start(ImageTask(self.signals, file_id, path, fmt, ext, orientation, max_side))
+        task = ImageTask(self.signals, file_id, path, fmt, ext, orientation, max_side)
+        if not self.pool.start(task.run):
+            self.pending.discard(key)

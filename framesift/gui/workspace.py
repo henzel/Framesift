@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+from PySide6.QtCore import QObject, Signal
 
 from framesift import __version__
 from framesift.engine import actions, api
@@ -17,7 +17,7 @@ from framesift.engine.jobs import JobControl
 from framesift.engine.paths import os_path
 from framesift.engine.thumbs import ThumbCache
 from framesift.gui.prefs import Prefs
-from framesift.gui.workers import ImageLoader, JobThread, ThumbnailLoader
+from framesift.gui.workers import ImageLoader, JobThread, TaskPool, ThumbnailLoader
 
 
 class _ActionSignals(QObject):
@@ -25,9 +25,8 @@ class _ActionSignals(QObject):
     failed = Signal(object, str)
 
 
-class _ActionTask(QRunnable):
+class _ActionTask:
     def __init__(self, signals: _ActionSignals, tag: Any, fn: Callable[[], Any]):
-        super().__init__()
         self.signals, self.tag, self.fn = signals, tag, fn
 
     def run(self) -> None:
@@ -61,8 +60,7 @@ class GuiWorkspace(QObject):
         self.image_loader = ImageLoader(self)
         self._jobs: dict[str, JobThread] = {}
         self._live_threads: list[JobThread] = []
-        self._actions = QThreadPool(self)
-        self._actions.setMaxThreadCount(1)
+        self._actions = TaskPool(1, "framesift-action")  # one thread: actions stay ordered
         self._action_signals = _ActionSignals()
         self._action_signals.done.connect(self._on_action_done)
         self._action_signals.failed.connect(self.action_failed)
@@ -130,7 +128,7 @@ class GuiWorkspace(QObject):
         self._jobs.clear()
         self._live_threads.clear()
         self.thumb_loader.cancel_all()
-        self._actions.waitForDone(10000)
+        self._actions.wait(10000)
         if self.ws is not None:
             self.ws.close()
             self.ws = None
@@ -143,6 +141,7 @@ class GuiWorkspace(QObject):
         self.thumb_loader.shutdown()
         self.image_loader.shutdown()
         self.close()
+        self._actions.shutdown(10000)
         self.thumb_cache.close()
 
     # ------------------------------------------------------------------ jobs
@@ -214,7 +213,7 @@ class GuiWorkspace(QObject):
 
     # ------------------------------------------------------------------ item actions (serialized)
     def _submit(self, tag: Any, fn: Callable[[], Any]) -> None:
-        self._actions.start(_ActionTask(self._action_signals, tag, fn))
+        self._actions.start(_ActionTask(self._action_signals, tag, fn).run)
 
     def _on_action_done(self, tag: Any, result: Any) -> None:
         self.action_done.emit(tag, result)
@@ -251,7 +250,7 @@ class GuiWorkspace(QObject):
         )
 
     def wait_actions(self, ms: int = 10000) -> bool:
-        return self._actions.waitForDone(ms)
+        return self._actions.wait(ms)
 
     # ------------------------------------------------------------------ helpers
     def file_row(self, file_id: int) -> dict[str, Any] | None:
