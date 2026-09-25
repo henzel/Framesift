@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from conftest import content_multiset, snapshot
+from helpers import content_multiset, snapshot
 
 from framesift.engine import api
 from framesift.engine.config import ClassifyConfig

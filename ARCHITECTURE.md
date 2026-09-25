@@ -229,6 +229,7 @@ CREATE TABLE files (
   reviewed_at    TEXT,                    -- manual-mode "seen" mark
   first_seen     TEXT NOT NULL,
   last_seen      TEXT NOT NULL,
+  seen_gen       INTEGER NOT NULL DEFAULT 0,   -- scan generation that last saw the file
   UNIQUE (root, rel_path)
 );
 CREATE INDEX files_item      ON files(item_id);
@@ -440,10 +441,11 @@ folder within the first second). The walk covers all three roots (Review and Del
 catalogued too, for the tree counters and reconciliation).
 
 Incremental rule: a row whose `(rel_path, size, mtime_ns)` is unchanged is only touched
-(`last_seen`); a changed one invalidates `file_meta`/`file_analysis` (they carry the
-size/mtime they were computed for); rows not seen by a **completed** walk of their
-subtree become `status='missing'` and are reported, never deleted from the catalog
-(their journal history must survive).
+(`last_seen`, `seen_gen`); a changed one invalidates `file_meta`/`file_analysis` (they
+carry the size/mtime they were computed for); rows whose `seen_gen` is older than the
+current scan generation and whose subtree was listed **without errors** become
+`status='missing'` and are reported, never deleted from the catalog (their journal
+history must survive).
 
 ### 9.2 Header-only metadata readers **[D]**
 
@@ -569,9 +571,11 @@ and as GUI sliders, and re-evaluation after a slider change needs no filesystem 
 ## 14. GUI (`framesift.gui`)
 
 * PySide6 widgets, Fusion style on Windows/Linux, native on macOS; light/dark from
-  `QStyleHints.colorScheme` (Qt ≥ 6.5) with a palette pair; i18n via `QTranslator`
-  (`.qm`) for UI strings and the engine's JSON catalogs for reasons/categories; language
-  from `QLocale.system()` unless overridden in Settings.
+  `QStyleHints.colorScheme` (Qt ≥ 6.5) with a palette pair; i18n through Python
+  dictionaries (`gui/i18n.py`, keyed by the English string, and the engine's catalogs for
+  reasons/categories) instead of `.ts/.qm` files: no build step, testable, one language
+  switch for GUI and engine **[D]**; language from the system locale unless overridden in
+  Settings.
 * Threads: the main thread only paints. `QThreadPool` for thumbnail loading (priority to
   visible rows, cancelled when scrolled away), metadata peeks and single moves; engine
   jobs run in a `QThread` that forwards progress signals; pixel analysis stays in the
@@ -764,6 +768,10 @@ project. The owner chose the first option (§23).
 19. The GUI opens a catalog read-only while another host holds the lock, showing that job's progress.
 20. Group mode `Enter` restores marked Review members to Source (the "keep" semantics of the manual-mode table).
 21. Docker uses the same LGPL FFmpeg static build as the desktop bundles, for a uniform license story.
+22. GUI strings are translated through Python dictionaries, not Qt `.ts/.qm` files.
+23. Manual-mode actions run on a single background thread in submission order; the view advances
+    immediately and reconciles on failure (keeps "next item < 100 ms" on slow network volumes).
+24. The session counters are net figures: an item restored later no longer counts as "to delete".
 
 ## 22. Milestones
 

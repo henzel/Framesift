@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conftest import snapshot
+from helpers import snapshot
 from typer.testing import CliRunner
 
 from framesift.cli.main import app

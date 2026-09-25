@@ -4,7 +4,7 @@ import struct
 from pathlib import Path
 
 import pytest
-from conftest import needs_ffmpeg
+from helpers import needs_ffmpeg
 from make_dataset import BIN_DIR, LIVE_ID_A, LIVE_ID_B
 
 from framesift.engine.metadata import detect_format, read_media_info

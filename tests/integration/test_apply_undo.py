@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conftest import content_multiset, snapshot
+from helpers import content_multiset, snapshot
 
 from framesift.engine import actions, api
 from framesift.engine.config import ClassifyConfig

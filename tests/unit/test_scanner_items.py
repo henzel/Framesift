@@ -5,7 +5,7 @@ import time
 import unicodedata
 from pathlib import Path
 
-from conftest import needs_ffmpeg
+from helpers import needs_ffmpeg
 from make_dataset import BIN_DIR
 
 from framesift.engine.catalog import Catalog

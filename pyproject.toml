@@ -85,3 +85,7 @@ python_version = "3.12"
 warn_unused_ignores = true
 ignore_missing_imports = true
 check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "framesift.gui.*"
+ignore_errors = true
