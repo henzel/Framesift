@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from framesift.engine.paths import to_os
+
 HEAD_SIZE = 256 * 1024
 TAIL_SIZE = 64 * 1024
 MAX_HEAD = 8 * 1024 * 1024
@@ -60,7 +62,7 @@ class FileReader:
 
     def __init__(self, path: Path | str, size: int | None = None):
         self.path = Path(path)
-        self._fh = open(self.path, "rb", buffering=0)  # noqa: SIM115 - explicit close()
+        self._fh = open(to_os(self.path), "rb", buffering=0)  # noqa: SIM115 - explicit close()
         self.size = size if size is not None else os.fstat(self._fh.fileno()).st_size
         self._head = b""
         self._tail: bytes | None = None

@@ -14,6 +14,7 @@ from typing import Any
 from PIL import Image, ImageOps
 
 from framesift.engine.external import find_binary, run_hidden
+from framesift.engine.paths import to_os
 
 _HEIF_REGISTERED = False
 
@@ -60,7 +61,7 @@ def apply_orientation(im: Image.Image, orientation: int | None = None) -> Image.
 def load_embedded_jpeg(path: Path, offset: int, length: int) -> Image.Image | None:
     if not offset or not length or length > 32 * 1024 * 1024:
         return None
-    with open(path, "rb") as fh:
+    with open(to_os(path), "rb") as fh:
         fh.seek(offset)
         data = fh.read(length)
     if data[:2] != b"\xff\xd8":
@@ -81,7 +82,7 @@ def decode_heif(
         try:
             import pi_heif
 
-            heif = pi_heif.open_heif(str(path), convert_hdr_to_8bit=True)
+            heif = pi_heif.open_heif(to_os(path), convert_hdr_to_8bit=True)
             if max_side and prefer_thumbnail:
                 thumbs = [
                     t for t in getattr(heif, "thumbnails", []) if max(t.size) >= max_side // 2
@@ -175,7 +176,7 @@ def open_full(path: Path, fmt: str | None, ext: str) -> Image.Image:
         if family in ("heic", "heif", "hif", "avif"):
             im = decode_heif(path, prefer_thumbnail=False)
         else:
-            im = Image.open(path)
+            im = Image.open(to_os(path))
             im.load()
         return im
     except DecodeError:
@@ -222,7 +223,7 @@ def small_image(path: Path, meta: dict[str, Any], max_side: int = 256) -> tuple[
         im.load()
         return _shrink(apply_orientation(im, orientation), max_side), "raw_preview"
     try:
-        im = Image.open(path)
+        im = Image.open(to_os(path))
         if im.format == "JPEG":
             im.draft("RGB", (max_side * 2, max_side * 2))
         im.load()

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import blake3
 
+from framesift.engine.paths import to_os
+
 PARTIAL_CHUNK = 64 * 1024
 FULL_CHUNK = 1024 * 1024
 
@@ -13,7 +15,7 @@ FULL_CHUNK = 1024 * 1024
 def partial_hash(path: Path, size: int | None = None) -> str:
     """BLAKE3 of the first and last 64 KB (the whole file when it is smaller than 128 KB)."""
     h = blake3.blake3()
-    with open(path, "rb") as fh:
+    with open(to_os(path), "rb") as fh:
         if size is None:
             fh.seek(0, 2)
             size = fh.tell()
@@ -29,7 +31,7 @@ def partial_hash(path: Path, size: int | None = None) -> str:
 
 def full_hash(path: Path) -> str:
     h = blake3.blake3()
-    with open(path, "rb") as fh:
+    with open(to_os(path), "rb") as fh:
         while True:
             chunk = fh.read(FULL_CHUNK)
             if not chunk:

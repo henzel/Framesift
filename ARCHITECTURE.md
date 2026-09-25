@@ -748,6 +748,23 @@ project. The owner chose the first option (§23).
 | SMB | header-only readers with one large read instead of many small ones; hashing only for size collisions; pixel stages meant to run on the NAS |
 | Catalog on SMB | batched transactions, 64 MB page cache, `DELETE` journal, `progress.json` for readers |
 
+### 20.1 Measured (v0.1.0, `tests/perf/bench.py`, 50,000 synthetic JPEGs + the test dataset, Linux container, 3 workers)
+
+| Step | Result | Target |
+|---|---:|---|
+| `scan` first run (walk + metadata) | 18.3 s | — |
+| `scan` again, nothing changed | 1.4 s | — |
+| `classify` all categories (partial hashes for every size collision, pixel metrics for every photo) | 29.8 s, peak RSS 500 MB | < 1.5 GB at 100k |
+| `report` / `apply --dry-run` | 0.3 s | — |
+| catalog size | 35 MB | — |
+| GUI window shown | 0.08 s after imports (≈ 1 s process start) | < 3 s |
+| open a 50k-item folder → list + first thumbnail | 0.47 s | < 1 s |
+| next item in manual mode (prefetched) | 2 ms | < 100 ms |
+
+The classify peak is dominated by the in-memory row list (three loads of ~50 columns × 50k
+rows); at 100k files it stays within the budget but it is the first thing to slim down (load
+only the columns the rules need).
+
 ## 21. Decisions where the specification is silent
 
 1. Metadata readers are pure Python; exiftool/ffprobe are optional fallbacks (§9.2).
