@@ -1,6 +1,7 @@
 name: Diagnostics (temporary)
 
-# Temporary: find the source of the Windows-only access violations in the GUI tests.
+# Temporary: verify the fix for the Windows-only access violations in the GUI tests
+# (ARCHITECTURE.md decision 26).
 # Every experiment is continue-on-error, so the run stays green and sends no failure mail.
 on:
   push:
@@ -53,76 +54,62 @@ jobs:
       - name: Helper scripts
         run: |
           cat > run_gui.sh <<'SH'
-          # usage: run_gui.sh LABEL COUNT
-          for i in $(seq 1 "$2"); do
-            python -m pytest -q -p no:cacheprovider tests/gui > "gui_$1_$i.log" 2>&1
+          # usage: run_gui.sh LABEL COUNT [pytest args...]
+          label=$1; count=$2; shift 2
+          for i in $(seq 1 "$count"); do
+            python -m pytest -q -p no:cacheprovider "$@" tests/gui > "gui_${label}_$i.log" 2>&1
             rc=$?
-            crash=no; grep -q 'Windows fatal exception' "gui_$1_$i.log" && crash=yes
-            echo "RESULT $1 run $i rc=$rc crash=$crash :: $(tail -1 "gui_$1_$i.log")"
+            crash=no; grep -q 'Windows fatal exception' "gui_${label}_$i.log" && crash=yes
+            echo "RESULT $label run $i rc=$rc crash=$crash dups=$(grep -c '^DUP' "gui_${label}_$i.log") :: $(tail -1 "gui_${label}_$i.log")"
             if [ "$crash" = yes ]; then
-              grep -A120 'Windows fatal exception' "gui_$1_$i.log" | grep -v -E 'site-packages|frozen runpy' | head -70
+              grep -A120 'Windows fatal exception' "gui_${label}_$i.log" | grep -v -E 'site-packages|frozen runpy' | head -70
             fi
+            grep '^DUP' "gui_${label}_$i.log" | cut -c1-300 | head -10
           done
           SH
-          cat > heif_stress.py <<'PY'
-          import pathlib, sys, threading, time
-          sys.path.insert(0, ".")
-          from framesift.engine.imaging import decode_heif
-          threads, rounds = int(sys.argv[1]), int(sys.argv[2])
-          files = sorted(pathlib.Path("tests/fixtures/bin").glob("*.heic"))
-          errors = []
-          def work(k):
-              try:
-                  for i in range(rounds):
-                      for f in files:
-                          im, src = decode_heif(f, max_side=(320 if (i + k) % 2 else None))
-                          im.load(); im.tobytes()
-              except Exception as exc:
-                  errors.append(repr(exc))
-          t0 = time.time()
-          pool = [threading.Thread(target=work, args=(k,)) for k in range(threads)]
-          [t.start() for t in pool]; [t.join() for t in pool]
-          print(f"heif stress {threads}x{rounds}x{len(files)} in {time.time() - t0:.1f}s errors {errors[:3]}")
+          cat > dup_probe.py <<'PY'
+          """Report C++ addresses that map to more than one live shiboken wrapper (stale entries)."""
+          from collections import defaultdict
+
+          import pytest
+          from shiboken6 import Shiboken
+
+          from framesift.gui.models import tree
+
+
+          def dups(tag):
+              by_addr = defaultdict(list)
+              for w in Shiboken.getAllValidWrappers():
+                  try:
+                      by_addr[Shiboken.getCppPointer(w)[0]].append(w)
+                  except Exception:
+                      pass
+              for addr, ws in by_addr.items():
+                  if len(ws) > 1:
+                      names = " | ".join(type(w).__name__ for w in ws)
+                      print(f"\nDUP[{tag}] 0x{addr:x}: {names}", flush=True)
+
+
+          _orig = tree.FolderTreeModel.rebuild
+
+
+          def rebuild(self):
+              dups("before-rebuild")
+              _orig(self)
+
+
+          tree.FolderTreeModel.rebuild = rebuild
+
+
+          @pytest.hookimpl(trylast=True)
+          def pytest_runtest_teardown(item):
+              dups(f"teardown {item.name}")
           PY
-      - name: A. GUI tests, as in CI (x4)
+      - name: A. GUI tests, as in CI (x16)
         continue-on-error: true
-        run: bash run_gui.sh A 4
-      - name: B. GUI tests without the HEIC fixtures (x4)
-        continue-on-error: true
-        run: |
-          mkdir -p ../heic_off && mv tests/fixtures/bin/*.heic ../heic_off/
-          bash run_gui.sh B 4
-          mv ../heic_off/*.heic tests/fixtures/bin/
-      - name: C. GUI tests on the native windows platform (x4)
+        run: bash run_gui.sh A 16
+      - name: B. GUI tests with the wrapper-map probe (x2)
         continue-on-error: true
         env:
-          QT_QPA_PLATFORM: windows
-        run: bash run_gui.sh C 4
-      - name: D. HEIF decode stress in 8 threads, no Qt (x3)
-        continue-on-error: true
-        run: |
-          for i in 1 2 3; do
-            python heif_stress.py 8 200 > heif_$i.log 2>&1; rc=$?
-            echo "RESULT D run $i rc=$rc :: $(tail -1 heif_$i.log)"
-            [ $rc -ne 0 ] && grep -A60 'Windows fatal exception' heif_$i.log | head -40
-          done
-          true
-      - name: E. Enable full page heap for python.exe
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\python.exe'
-          New-Item -Path $k -Force | Out-Null
-          New-ItemProperty -Path $k -Name GlobalFlag -Value '0x02000000' -PropertyType String -Force | Out-Null
-          New-ItemProperty -Path $k -Name PageHeapFlags -Value '0x3' -PropertyType String -Force | Out-Null
-          Get-ItemProperty $k | Select-Object GlobalFlag, PageHeapFlags
-      - name: F. GUI tests under full page heap (x2)
-        continue-on-error: true
-        run: bash run_gui.sh F 2
-      - name: G. HEIF decode stress under full page heap
-        continue-on-error: true
-        run: |
-          python heif_stress.py 8 40 > heif_ph.log 2>&1; rc=$?
-          echo "RESULT G rc=$rc :: $(tail -1 heif_ph.log)"
-          [ $rc -ne 0 ] && grep -A60 'Windows fatal exception' heif_ph.log | head -40
-          true
+          PYTHONPATH: "."
+        run: bash run_gui.sh B 2 -s -p dup_probe
