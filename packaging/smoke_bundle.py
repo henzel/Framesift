@@ -30,6 +30,8 @@ def main() -> None:
         info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
         if info.get("CFBundleExecutable") != "framesift-gui":
             fail(f"CFBundleExecutable is {info.get('CFBundleExecutable')!r}, not the app")
+        if info.get("LSBackgroundOnly"):
+            fail("LSBackgroundOnly is set: the app would run without a Dock icon")
     else:
         folder = Path("dist/Framesift")
     suffix = ".exe" if platform == "windows" else ""

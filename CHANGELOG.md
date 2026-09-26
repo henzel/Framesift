@@ -13,6 +13,10 @@ All notable changes to Framesift are documented here. The format follows
   example thumbnails left stale entries in PySide's table of Python wrappers; once Qt reused
   that memory, the table pointed at freed objects and the heap was corrupted. The folder tree no
   longer uses `QStandardItem`, which is torn down through the same path.
+- 0.1.1 was never published: its new bundle smoke test showed that the macOS app still started
+  the command-line tool (the bundle took its executable, and a background-only flag that hides
+  the Dock icon, from the tool) and that the Linux app could not start without PulseAudio's
+  client library, which is now included.
 
 ## [0.1.1] - 2026-09-26
 

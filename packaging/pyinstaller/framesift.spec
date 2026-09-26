@@ -123,6 +123,11 @@ if PLATFORM == "macos":
         bundle_identifier="dev.framesift.app",
         version=__version__.split("+")[0].replace(".dev0", ""),
         info_plist={
+            # BUNDLE would take both from the CLI: the executable from the alphabetically first
+            # one (framesift) and LSBackgroundOnly from the console flag of the last EXE in
+            # COLLECT, which would make the app a background agent without a Dock icon.
+            "CFBundleExecutable": GUI_EXE,
+            "LSBackgroundOnly": False,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "12.0",
             "NSRequiresAquaSystemAppearance": False,
