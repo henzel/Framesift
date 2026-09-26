@@ -8,12 +8,18 @@ on:
       - "docs/**"
       - "LICENSE"
       - ".github/ISSUE_TEMPLATE/**"
+      # temporary, while the Windows diagnostics run (removed with diagnostics.yml)
+      - ".github/workflows/diagnostics.yml"
+      - ".github/workflows/ci.yml"
   pull_request:
     paths-ignore:
       - "**.md"
       - "docs/**"
       - "LICENSE"
       - ".github/ISSUE_TEMPLATE/**"
+      # temporary, while the Windows diagnostics run (removed with diagnostics.yml)
+      - ".github/workflows/diagnostics.yml"
+      - ".github/workflows/ci.yml"
 
 concurrency:
   group: ci-${{ github.ref }}
