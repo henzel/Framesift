@@ -38,5 +38,5 @@ First release.
 - Desktop bundles for macOS (Apple Silicon, Intel), Windows x64 and Linux x64 (AppImage) with
   LGPL builds of ffmpeg and exiftool included.
 
-[Unreleased]: https://github.com/henzel/PhotoSift/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/henzel/PhotoSift/releases/tag/v0.1.0
+[Unreleased]: https://github.com/henzel/framesift/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/henzel/framesift/releases/tag/v0.1.0

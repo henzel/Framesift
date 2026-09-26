@@ -52,7 +52,7 @@ NFD/NFC file names on macOS and SMB shares.
 
 ## Install
 
-Downloads are on the [Releases](https://github.com/henzel/PhotoSift/releases) page.
+Downloads are on the [Releases](https://github.com/henzel/framesift/releases) page.
 
 * **macOS** (Apple Silicon and Intel builds): open the `.dmg` and drag Framesift to Applications.
   The build is unsigned unless the maintainer has an Apple Developer certificate configured:
@@ -63,7 +63,7 @@ Downloads are on the [Releases](https://github.com/henzel/PhotoSift/releases) pa
   `framesift.exe` in the same folder.
 * **Linux x64**: `chmod +x Framesift-*.AppImage && ./Framesift-*.AppImage`. The CLI is
   `./Framesift-*.AppImage cli …`.
-* **From source** (any OS with Python 3.12): `pip install "framesift[gui] @ git+https://github.com/henzel/PhotoSift"`,
+* **From source** (any OS with Python 3.12): `pip install "framesift[gui] @ git+https://github.com/henzel/framesift"`,
   then `framesift-gui`. Install `ffmpeg` (video thumbnails and playback fallback) and optionally
   `exiftool` (RAW previews) with your package manager; the desktop bundles ship LGPL builds.
 

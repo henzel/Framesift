@@ -18,7 +18,7 @@ correctness is high and the rules below are not optional.
 ## Development setup
 
 ```bash
-git clone https://github.com/henzel/PhotoSift && cd PhotoSift
+git clone https://github.com/henzel/framesift && cd framesift
 python3.12 -m venv .venv && source .venv/bin/activate      # or: uv venv --python 3.12
 pip install -e ".[gui,dev]"
 # ffmpeg is needed for video tests; exiftool is optional

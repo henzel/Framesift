@@ -54,7 +54,7 @@ NFD/NFC в именах на macOS и SMB-шарах.
 
 ## Установка
 
-Сборки лежат на странице [Releases](https://github.com/henzel/PhotoSift/releases).
+Сборки лежат на странице [Releases](https://github.com/henzel/framesift/releases).
 
 * **macOS** (отдельные сборки для Apple Silicon и Intel): откройте `.dmg` и перетащите
   Framesift в Applications. Сборка не подписана, если у мейнтейнера не настроен сертификат
@@ -66,7 +66,7 @@ NFD/NFC в именах на macOS и SMB-шарах.
 * **Linux x64**: `chmod +x Framesift-*.AppImage && ./Framesift-*.AppImage`. CLI:
   `./Framesift-*.AppImage cli …`.
 * **Из исходников** (любая ОС с Python 3.12):
-  `pip install "framesift[gui] @ git+https://github.com/henzel/PhotoSift"`, затем `framesift-gui`.
+  `pip install "framesift[gui] @ git+https://github.com/henzel/framesift"`, затем `framesift-gui`.
   Поставьте `ffmpeg` (превью видео и запасной плеер) и при желании `exiftool` (превью RAW)
   пакетным менеджером; десктоп-сборки уже содержат LGPL-версии.
 

@@ -53,8 +53,8 @@ framesift = "framesift.cli.main:main"
 framesift-gui = "framesift.gui.app:main"
 
 [project.urls]
-Homepage = "https://github.com/henzel/PhotoSift"
-Issues = "https://github.com/henzel/PhotoSift/issues"
+Homepage = "https://github.com/henzel/framesift"
+Issues = "https://github.com/henzel/framesift/issues"
 
 [tool.setuptools]
 packages = { find = { include = ["framesift*"] } }
