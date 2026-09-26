@@ -706,8 +706,12 @@ project. The owner chose the first option (§23).
   `gui` extra: ruff, mypy (engine + CLI), pytest with `QT_QPA_PLATFORM=offscreen`; ffmpeg
   from apt / brew / the BtbN LGPL build on Windows.
 * **Release (`release.yml`)**: on tag `v*`: four bundles (macOS arm64 on `macos-14`,
-  Intel on the current Intel runner label), Docker buildx for amd64+arm64 → GHCR,
-  draft GitHub Release with the CHANGELOG section attached.
+  Intel on the current Intel runner label), each smoke-tested by starting its CLI and app
+  (`packaging/smoke_bundle.py`), Docker buildx for amd64+arm64 → GHCR, draft GitHub
+  Release with the CHANGELOG section attached. The bundles are also built and smoke-tested
+  on pushes to main that change packaging (nothing is published).
+* **Housekeeping**: `delete-failed-runs.yml` removes failed runs from the Actions list
+  (on demand).
 * **Signing**: if `APPLE_CERTIFICATE_P12`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`,
   `APPLE_ID`, `APPLE_APP_PASSWORD` exist → `codesign` + `notarytool` + staple; if
   `WINDOWS_CERT_PFX`/`WINDOWS_CERT_PASSWORD` exist → `signtool`. Otherwise unsigned,
