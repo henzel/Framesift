@@ -213,7 +213,7 @@ class BrowserView(QWidget):
         self.tree_model.rebuild()
         self.tree.expandToDepth(0)
         if self.tree_model.source_item is not None:
-            self.tree.setCurrentIndex(self.tree_model.source_item.index())
+            self.tree.setCurrentIndex(self.tree_model.index_of(self.tree_model.source_item))
         self.reload()
 
     def reload(self) -> None:
@@ -235,29 +235,12 @@ class BrowserView(QWidget):
         self._update_count()
 
     def _select_node(self, node: dict[str, Any]) -> None:
-        for item in (
-            self.tree_model.source_item,
-            self.tree_model.review_item,
-            self.tree_model.delete_item,
-        ):
-            if item is None:
-                continue
-            found = self._find(item, node)
-            if found is not None:
-                self.tree.blockSignals(True)
-                self.tree.setCurrentIndex(found.index())
-                self.tree.blockSignals(False)
-                self.current_node = node
-                return
-
-    def _find(self, item, node: dict[str, Any]):
-        if item.data(NodeRole) == node:
-            return item
-        for i in range(item.rowCount()):
-            found = self._find(item.child(i), node)
-            if found is not None:
-                return found
-        return None
+        index = self.tree_model.find(node)
+        if index.isValid():
+            self.tree.blockSignals(True)
+            self.tree.setCurrentIndex(index)
+            self.tree.blockSignals(False)
+            self.current_node = node
 
     def _on_tree_current(self, current: QModelIndex, _previous: QModelIndex) -> None:
         node = current.data(NodeRole)

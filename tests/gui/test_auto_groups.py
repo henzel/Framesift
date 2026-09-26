@@ -77,7 +77,7 @@ def test_auto_mode_report_thresholds_and_apply(
     qtbot.waitUntil(
         lambda: (
             window.browser.tree_model.review_item is not None
-            and window.browser.tree_model.review_item.rowCount() >= 2
+            and len(window.browser.tree_model.review_item.children) >= 2
         ),
         timeout=5000,
     )

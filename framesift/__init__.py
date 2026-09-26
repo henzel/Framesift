@@ -1,6 +1,6 @@
 """Framesift: sort large photo and video archives safely."""
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 APP_NAME = "Framesift"
 APP_ID = "framesift"

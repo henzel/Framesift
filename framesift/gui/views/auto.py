@@ -61,16 +61,20 @@ class CategoryCard(QGroupBox):
         layout.addLayout(head)
         layout.addWidget(self.examples)
         self.thumbs: dict[int, QLabel] = {}
+        self._labels: list[QLabel] = []  # every label in the grid
 
     def set_report(self, report: Any) -> None:
         self.count_label.setText(f"{report.count:,}")
         self.size_label.setText(human_bytes(report.bytes))
         self.confidence_label.setText(t(f"confidence.{report.confidence}"))
         self.enabled_box.setChecked(report.enabled)
-        for i in reversed(range(self.grid.count())):
-            w = self.grid.itemAt(i).widget()
-            if w:
-                w.setParent(None)
+        # Drop the old labels through our own references, never through QLayout.itemAt():
+        # PySide keeps a wrapper for the C++-owned layout item it returns, Qt deletes that item
+        # when its widget leaves the layout, and the stale wrapper later corrupts the heap
+        # (ARCHITECTURE.md decision 26).
+        for lab in self._labels:
+            lab.setParent(None)
+        self._labels = []
         self.thumbs.clear()
         for i, ex in enumerate(report.examples[:12]):
             lab = QLabel(self.examples)
@@ -79,6 +83,7 @@ class CategoryCard(QGroupBox):
             lab.setStyleSheet("background: rgba(0,0,0,30);")
             lab.setToolTip(f"{ex.rel_path}\n{ex.reason}")
             self.grid.addWidget(lab, i // 12, i % 12)
+            self._labels.append(lab)
             self.thumbs[ex.file_id] = lab
 
 

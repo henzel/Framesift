@@ -48,7 +48,7 @@ def test_open_folder_and_browse(qtbot, window: MainWindow, fresh) -> None:
     assert names == sorted(names)
     # tree shows the three roots
     tree = window.browser.tree_model
-    assert tree.rowCount() == 3 and tree.source_item.rowCount() >= 5
+    assert tree.rowCount() == 3 and len(tree.source_item.children) >= 5
 
 
 def test_review_keys_keep_delete_undo(qtbot, window: MainWindow, fresh) -> None:

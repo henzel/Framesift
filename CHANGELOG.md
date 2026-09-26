@@ -6,6 +6,14 @@ All notable changes to Framesift are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-26
+
+### Fixed
+- Random crashes, seen mostly on Windows, after using the automatic mode. Refreshing a category's
+  example thumbnails left stale entries in PySide's table of Python wrappers; once Qt reused
+  that memory, the table pointed at freed objects and the heap was corrupted. The folder tree no
+  longer uses `QStandardItem`, which is torn down through the same path.
+
 ## [0.1.1] - 2026-09-26
 
 ### Fixed
@@ -48,6 +56,7 @@ First release.
 - Desktop bundles for macOS (Apple Silicon, Intel), Windows x64 and Linux x64 (AppImage) with
   LGPL builds of ffmpeg and exiftool included.
 
-[Unreleased]: https://github.com/henzel/framesift/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/henzel/framesift/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/henzel/framesift/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/henzel/framesift/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/henzel/framesift/releases/tag/v0.1.0

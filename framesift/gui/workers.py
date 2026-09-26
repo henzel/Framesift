@@ -8,8 +8,8 @@ created, used or released off the GUI thread. `GuiGarbageCollector` runs Python'
 collector on the GUI thread only, for the same reason: automatic collection runs in whichever
 thread happens to allocate, and would finalize Qt wrappers there.
 
-This replaced QThreadPool/QRunnable and QThread workers, which crashed with heap corruption
-under PySide6 6.11 on Windows (ARCHITECTURE.md decision 25)."""
+This replaced QThreadPool/QRunnable workers, which released Qt wrappers on pool threads
+(ARCHITECTURE.md decision 25)."""
 
 from __future__ import annotations
 

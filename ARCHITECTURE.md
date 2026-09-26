@@ -106,7 +106,7 @@ framesift/                     Python package (src layout not used: keeps PyInst
     main_window.py             navigation: Browser / Manual / Groups / Auto / Journal / Settings
     models/                    CatalogListModel (virtualized), FolderTreeModel, JournalModel
     views/                     browser.py manual.py groups.py auto.py journal.py settings.py
-    workers/                   QThread bridges to engine jobs; ThumbnailLoader (QThreadPool)
+    workers.py                 job threads, thumbnail/image pools, GUI-thread result dispatcher
     media/                     ImageView (QGraphicsView), VideoView (QMediaPlayer), FfmpegFrameView
     i18n/                      framesift_ru.ts / .qm (UI strings)
   resources/                   icons (own, MIT)
@@ -576,10 +576,10 @@ and as GUI sliders, and re-evaluation after a slider change needs no filesystem 
   reasons/categories) instead of `.ts/.qm` files: no build step, testable, one language
   switch for GUI and engine **[D]**; language from the system locale unless overridden in
   Settings.
-* Threads: the main thread only paints. `QThreadPool` for thumbnail loading (priority to
-  visible rows, cancelled when scrolled away), metadata peeks and single moves; engine
-  jobs run in a `QThread` that forwards progress signals; pixel analysis stays in the
-  engine's process pool.
+* Threads: the main thread only paints. Engine jobs, thumbnail loading (cancelled when
+  scrolled away), image decodes and single moves run on plain Python threads that hand their
+  results to a GUI-thread dispatcher (decision 25); pixel analysis stays in the engine's
+  process pool.
 * **Browser**: left `QTreeView` (Source subfolders; Review categories with count/size;
   Delete with count/size; counters updated from journal signals), centre `QListView` in
   icon mode over `CatalogListModel` (ids only in memory, row cache LRU 10k, uniform
@@ -796,9 +796,17 @@ only the columns the rules need).
     thumbnails, image decodes and file actions on `concurrent.futures` pools. Worker code holds
     only plain Python objects and puts its results on a queue that a GUI-thread timer drains,
     emitting the Qt signals there. Python's cyclic garbage collector is switched to manual and
-    runs from a GUI-thread timer, so Qt wrappers are never finalized on a worker thread. Earlier
-    designs (QThreadPool with Python `QRunnable` subclasses, then QThread workers) crashed with
-    heap corruption under PySide6 6.11 on Windows.
+    runs from a GUI-thread timer, so Qt wrappers are never finalized on a worker thread. The
+    first design (QThreadPool with Python `QRunnable` subclasses) released wrappers on pool
+    threads; the Windows access violations later blamed on QThread workers were decision 26.
+26. No Python wrapper for a C++-owned object that Qt may delete on its own. shiboken maps C++
+    addresses to Python wrappers; when Qt deletes such an object behind its back the entry goes
+    stale, a later object at the same address resolves to the dead wrapper, and shiboken reads,
+    writes and frees memory it no longer owns (random access violations on Windows, glibc
+    aborts in a small repro on Linux). So widgets leave layouts through our own references,
+    never `QLayout.itemAt()`/`takeAt()`, and the folder tree is a `QAbstractItemModel` over
+    plain Python nodes rather than `QStandardItem`s, whose teardown with wrapped children hits
+    those stale entries. `tests/gui/test_models.py` guards both.
 
 ## 22. Milestones
 
