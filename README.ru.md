@@ -137,24 +137,25 @@ NFD/NFC в именах на macOS и SMB-шарах.
 Каталог хранится в `<Ревью>/.framesift/`, поэтому десктоп-приложение на Mac или ПК потом
 открывает ту же папку по SMB и продолжает с тем, что посчитал NAS.
 
-**Synology DSM 7 — по SSH:**
+**Synology DSM 7 — по SSH** (Панель управления → Терминал и SNMP → включить SSH; входите под
+администратором; Docker на DSM работает только через `sudo`):
 
 ```bash
 # один раз узнайте uid и gid своего пользователя
 id photo-user            # → uid=1026(photo-user) gid=100(users)
 
-docker run --rm -it --user 1026:100 \
+sudo docker run --rm -it --user 1026:100 \
   -v /volume1/photo:/data \
   ghcr.io/henzel/framesift:latest \
   scan --source /data/Archive --low-priority
 
-docker run --rm -it --user 1026:100 -v /volume1/photo:/data ghcr.io/henzel/framesift:latest \
+sudo docker run --rm -it --user 1026:100 -v /volume1/photo:/data ghcr.io/henzel/framesift:latest \
   classify --catalog /data/Archive/_framesift_review --low-priority --workers 2
-docker run --rm -it --user 1026:100 -v /volume1/photo:/data ghcr.io/henzel/framesift:latest \
+sudo docker run --rm -it --user 1026:100 -v /volume1/photo:/data ghcr.io/henzel/framesift:latest \
   report --catalog /data/Archive/_framesift_review
-docker run --rm -it --user 1026:100 -v /volume1/photo:/data ghcr.io/henzel/framesift:latest \
+sudo docker run --rm -it --user 1026:100 -v /volume1/photo:/data ghcr.io/henzel/framesift:latest \
   apply --catalog /data/Archive/_framesift_review            # dry-run
-docker run --rm -it --user 1026:100 -v /volume1/photo:/data ghcr.io/henzel/framesift:latest \
+sudo docker run --rm -it --user 1026:100 -v /volume1/photo:/data ghcr.io/henzel/framesift:latest \
   apply --catalog /data/Archive/_framesift_review --yes      # реальное перемещение
 ```
 
