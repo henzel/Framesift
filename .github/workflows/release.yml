@@ -75,11 +75,8 @@ jobs:
       - name: PyInstaller
         shell: bash
         run: pyinstaller --noconfirm --clean packaging/pyinstaller/framesift.spec
-      - name: Bundle smoke test (CLI from the bundle)
-        shell: bash
-        run: |
-          if [[ "${{ matrix.platform }}" == "macos" ]]; then BIN="dist/Framesift.app/Contents/MacOS/framesift"; else BIN="dist/Framesift/framesift"; fi
-          "$BIN" --version
+      - name: Bundle smoke test (CLI and app from the bundle)
+        run: python packaging/smoke_bundle.py ${{ matrix.platform }}
       - name: Package (macOS DMG)
         if: matrix.platform == 'macos'
         env:

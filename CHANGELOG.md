@@ -6,6 +6,16 @@ All notable changes to Framesift are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-26
+
+### Fixed
+- The macOS and Windows bundles started the command-line tool instead of the app, so the app
+  seemed not to open. The app and the tool were named `Framesift` and `framesift`, which is one
+  file on case-insensitive file systems. The app executable is now `framesift-gui` on every
+  platform (on Windows: `framesift-gui.exe`).
+- Release builds now start the bundled app in a smoke test, not only the command-line tool.
+- Instructions for opening the unsigned app on macOS 15 and later.
+
 ## [0.1.0] - 2026-09-25
 
 First release.
@@ -38,5 +48,6 @@ First release.
 - Desktop bundles for macOS (Apple Silicon, Intel), Windows x64 and Linux x64 (AppImage) with
   LGPL builds of ffmpeg and exiftool included.
 
-[Unreleased]: https://github.com/henzel/framesift/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/henzel/framesift/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/henzel/framesift/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/henzel/framesift/releases/tag/v0.1.0

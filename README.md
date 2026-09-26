@@ -55,10 +55,12 @@ NFD/NFC file names on macOS and SMB shares.
 Downloads are on the [Releases](https://github.com/henzel/framesift/releases) page.
 
 * **macOS** (Apple Silicon and Intel builds): open the `.dmg` and drag Framesift to Applications.
-  The build is unsigned unless the maintainer has an Apple Developer certificate configured:
-  on first start, right-click the app → **Open** → **Open**, or run
-  `xattr -d com.apple.quarantine /Applications/Framesift.app` once.
-* **Windows 10/11 x64**: unzip and run `Framesift.exe`. SmartScreen will say "Windows protected
+  The build is unsigned unless the maintainer has an Apple Developer certificate configured.
+  On first start macOS says it cannot verify the app: click **Done**, then open
+  **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to the
+  Framesift message. Or run `xattr -dr com.apple.quarantine /Applications/Framesift.app` once.
+  (Right-click → **Open** no longer works for unsigned apps since macOS 15.)
+* **Windows 10/11 x64**: unzip and run `framesift-gui.exe`. SmartScreen will say "Windows protected
   your PC" for an unsigned build: click **More info** → **Run anyway**. The command-line tool is
   `framesift.exe` in the same folder.
 * **Linux x64**: `chmod +x Framesift-*.AppImage && ./Framesift-*.AppImage`. The CLI is

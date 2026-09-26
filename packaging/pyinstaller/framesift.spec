@@ -21,6 +21,13 @@ from framesift import APP_NAME, __version__  # noqa: E402
 PLATFORM = {"darwin": "macos", "win32": "windows"}.get(sys.platform, "linux")
 BIN_DIR = ROOT / "packaging" / "bin" / PLATFORM
 
+# Both executables land in one folder (Contents/MacOS on macOS). macOS and Windows file
+# systems ignore case, so the names must differ case-insensitively: in 0.1.0 "Framesift"
+# and "framesift" were one file there and the CLI replaced the app.
+GUI_EXE = "framesift-gui"
+CLI_EXE = "framesift"
+assert GUI_EXE.lower() != CLI_EXE.lower(), "GUI and CLI executable names collide"
+
 binaries = []
 datas = collect_data_files("framesift", includes=["engine/schema/*.sql"])
 if BIN_DIR.is_dir():
@@ -60,7 +67,7 @@ cli_a = Analysis(
     excludes=[*excludes, "PySide6"],
     noarchive=False,
 )
-MERGE((gui_a, "framesift-gui", "framesift-gui"), (cli_a, "framesift", "framesift"))
+MERGE((gui_a, GUI_EXE, GUI_EXE), (cli_a, CLI_EXE, CLI_EXE))
 
 gui_pyz = PYZ(gui_a.pure)
 cli_pyz = PYZ(cli_a.pure)
@@ -76,7 +83,7 @@ gui_exe = EXE(
     gui_a.scripts,
     [],
     exclude_binaries=True,
-    name=APP_NAME if PLATFORM != "linux" else "framesift-gui",
+    name=GUI_EXE,
     debug=False,
     strip=False,
     upx=False,
@@ -89,7 +96,7 @@ cli_exe = EXE(
     cli_a.scripts,
     [],
     exclude_binaries=True,
-    name="framesift",
+    name=CLI_EXE,
     debug=False,
     strip=False,
     upx=False,

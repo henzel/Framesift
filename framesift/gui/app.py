@@ -9,7 +9,7 @@ from framesift import APP_ID, APP_NAME, __version__
 
 
 def main(argv: list[str] | None = None) -> int:
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication, QTimer
     from PySide6.QtWidgets import QApplication
 
     from framesift.engine.i18n import set_language
@@ -18,6 +18,9 @@ def main(argv: list[str] | None = None) -> int:
     from framesift.gui.theme import apply_theme
 
     argv = list(sys.argv[1:] if argv is None else argv)
+    # Packaging check used by the release workflow: start, build the window, close, exit 0.
+    smoke_test = "--smoke-test" in argv
+    argv = [a for a in argv if a != "--smoke-test"]
     QCoreApplication.setOrganizationName(APP_NAME)
     QCoreApplication.setApplicationName(APP_NAME)
     QCoreApplication.setApplicationVersion(__version__)
@@ -28,6 +31,9 @@ def main(argv: list[str] | None = None) -> int:
     set_language(None if lang == "system" else lang)
     window = MainWindow(prefs)
     window.show()
+    if smoke_test:
+        QTimer.singleShot(1500, window.close)
+        return app.exec()
     folder = next((a for a in argv if not a.startswith("-")), None) or next(
         iter(prefs.get("recent", [])), None
     )
