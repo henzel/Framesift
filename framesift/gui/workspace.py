@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import traceback
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -17,24 +18,26 @@ from framesift.engine.jobs import JobControl
 from framesift.engine.paths import os_path
 from framesift.engine.thumbs import ThumbCache
 from framesift.gui.prefs import Prefs
-from framesift.gui.workers import ImageLoader, JobThread, TaskPool, ThumbnailLoader
+from framesift.gui.workers import (
+    GuiDispatcher,
+    GuiGarbageCollector,
+    ImageLoader,
+    JobThread,
+    ResultQueue,
+    TaskPool,
+    ThumbnailLoader,
+)
 
 
-class _ActionSignals(QObject):
-    done = Signal(object, object)  # tag, result
-    failed = Signal(object, str)
-
-
-class _ActionTask:
-    def __init__(self, signals: _ActionSignals, tag: Any, fn: Callable[[], Any]):
-        self.signals, self.tag, self.fn = signals, tag, fn
-
-    def run(self) -> None:
-        try:
-            self.signals.done.emit(self.tag, self.fn())
-        except Exception as exc:
-            traceback.print_exc()
-            self.signals.failed.emit(self.tag, f"{type(exc).__name__}: {exc}")
+def _run_action(fn: Callable[[], Any], out: ResultQueue, key: int, tag: Any) -> None:
+    """Action worker (one thread, submission order): plain Python only."""
+    try:
+        result = fn()
+    except Exception as exc:
+        traceback.print_exc()
+        out.put(key, tag, False, f"{type(exc).__name__}: {exc}")
+    else:
+        out.put(key, tag, True, result)
 
 
 class GuiWorkspace(QObject):
@@ -56,17 +59,19 @@ class GuiWorkspace(QObject):
         self.ws: api.Workspace | None = None
         limit = int(float(prefs.get("cache_limit_gb", 2.0)) * 1024**3)
         self.thumb_cache = ThumbCache(cache_dir, limit_bytes=max(limit, 64 * 1024 * 1024))
-        self.thumb_loader = ThumbnailLoader(self.thumb_cache, self)
-        self.image_loader = ImageLoader(self)
+        # Qt only on the GUI thread: workers hand results to the dispatcher, and the cyclic
+        # garbage collector runs here too (see framesift/gui/workers.py).
+        self.dispatcher = GuiDispatcher(self)
+        self._gc = GuiGarbageCollector(self)
+        self.thumb_loader = ThumbnailLoader(self.thumb_cache, self.dispatcher, self)
+        self.image_loader = ImageLoader(self.dispatcher, self)
         self._jobs: dict[str, JobThread] = {}
         self._live_threads: list[JobThread] = []
         # Finished jobs stay referenced until the workspace closes, so their Qt objects are
         # released on the GUI thread at a known point instead of by a garbage collection.
         self._retired: list[JobThread] = []
         self._actions = TaskPool(1, "framesift-action")  # one thread: actions stay ordered
-        self._action_signals = _ActionSignals()
-        self._action_signals.done.connect(self._on_action_done)
-        self._action_signals.failed.connect(self.action_failed)
+        self._action_key = self.dispatcher.register(self._on_action_event)
         self.last_issues: list = []
 
     # ------------------------------------------------------------------ open / close
@@ -146,6 +151,7 @@ class GuiWorkspace(QObject):
         self.image_loader.shutdown()
         self.close()
         self._actions.shutdown(10000)
+        self.dispatcher.shutdown()
         self.thumb_cache.close()
 
     # ------------------------------------------------------------------ jobs
@@ -156,7 +162,7 @@ class GuiWorkspace(QObject):
                 return None
             previous.wait(5000)
             self._jobs.pop(kind, None)
-        thread = JobThread(fn)
+        thread = JobThread(fn, self.dispatcher)
         thread.progress.connect(lambda data, k=kind: self.job_progress.emit(k, data))
         thread.finished_ok.connect(lambda result, k=kind: self._job_done(k, result))
         thread.failed.connect(lambda msg, k=kind: self._job_fail(k, msg))
@@ -171,7 +177,6 @@ class GuiWorkspace(QObject):
             self._jobs.pop(kind, None)
         if thread in self._live_threads:
             self._live_threads.remove(thread)
-            thread.release()
             self._retired.append(thread)
 
     def _job_done(self, kind: str, result: Any) -> None:
@@ -192,8 +197,10 @@ class GuiWorkspace(QObject):
         if ws is None or ws.catalog.read_only:
             return None
 
+        threads = self._threads()
+
         def fn(progress: Callable[[dict], None], control: JobControl):
-            return api.run_scan(ws, progress=progress, control=control, threads=self._threads())
+            return api.run_scan(ws, progress=progress, control=control, threads=threads)
 
         return self.run_job("scan", fn)
 
@@ -217,11 +224,14 @@ class GuiWorkspace(QObject):
 
     # ------------------------------------------------------------------ item actions (serialized)
     def _submit(self, tag: Any, fn: Callable[[], Any]) -> None:
-        self._actions.start(_ActionTask(self._action_signals, tag, fn).run)
+        self._actions.start(partial(_run_action, fn, self.dispatcher.queue, self._action_key, tag))
 
-    def _on_action_done(self, tag: Any, result: Any) -> None:
-        self.action_done.emit(tag, result)
-        self.changed.emit()
+    def _on_action_event(self, tag: Any, ok: bool, payload: Any) -> None:
+        if ok:
+            self.action_done.emit(tag, payload)
+            self.changed.emit()
+        else:
+            self.action_failed.emit(tag, payload)
 
     def keep(self, item_id: int) -> None:
         ws = self.ws

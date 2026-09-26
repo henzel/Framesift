@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import math
 import os
 import threading
@@ -156,6 +157,9 @@ def set_low_priority() -> None:
 
 
 def _init_worker(low_priority: bool) -> None:
+    # A forked worker inherits the parent's GC state; the GUI switches automatic collection
+    # off (it collects on its GUI thread), the worker must not.
+    gc.enable()
     if low_priority:
         set_low_priority()
 

@@ -792,11 +792,13 @@ only the columns the rules need).
 23. Manual-mode actions run on a single background thread in submission order; the view advances
     immediately and reconciles on failure (keeps "next item < 100 ms" on slow network volumes).
 24. The session counters are net figures: an item restored later no longer counts as "to delete".
-25. GUI background work runs on plain Python threads: engine jobs on one `threading.Thread` each,
-    thumbnails, image decodes and file actions on `concurrent.futures` pools. Qt thread classes are
-    avoided: Qt deleting Python `QRunnable` subclasses from its pool threads corrupted the heap under
-    PySide6 6.11, and QThread objects released right after `finished` crashed on Windows. Every Qt
-    object is created on the GUI thread; results reach it as queued Qt signals.
+25. Qt is touched only on the GUI thread. Engine jobs run on one `threading.Thread` each;
+    thumbnails, image decodes and file actions on `concurrent.futures` pools. Worker code holds
+    only plain Python objects and puts its results on a queue that a GUI-thread timer drains,
+    emitting the Qt signals there. Python's cyclic garbage collector is switched to manual and
+    runs from a GUI-thread timer, so Qt wrappers are never finalized on a worker thread. Earlier
+    designs (QThreadPool with Python `QRunnable` subclasses, then QThread workers) crashed with
+    heap corruption under PySide6 6.11 on Windows.
 
 ## 22. Milestones
 

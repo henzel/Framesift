@@ -1,95 +1,151 @@
-"""Background work for the GUI on plain Python threads.
+"""Background work for the GUI.
 
-Engine jobs run on `JobThread` (one `threading.Thread` each); thumbnails, image decodes and
-file actions run on `TaskPool` (a thin wrapper over `concurrent.futures.ThreadPoolExecutor`).
-Qt thread classes are avoided on purpose: Python QRunnable subclasses deleted by Qt from its
-pool threads corrupted the heap under PySide6 6.11, and releasing QThread objects right after
-`finished` crashed on Windows. Every Qt object here is created on the GUI thread; results
-reach it through Qt signals, which Qt queues onto the GUI thread."""
+Rule: Qt is touched only on the GUI thread. Worker threads (one `threading.Thread` per engine
+job, `TaskPool` threads for thumbnails, image decodes and file actions) run plain Python and
+hand their results to a `ResultQueue`; `GuiDispatcher` drains it from a GUI-thread timer and
+emits the Qt signals there. Worker code holds no reference to any Qt object, so no Qt object is
+created, used or released off the GUI thread. `GuiGarbageCollector` runs Python's cyclic
+collector on the GUI thread only, for the same reason: automatic collection runs in whichever
+thread happens to allocate, and would finalize Qt wrappers there.
+
+This replaced QThreadPool/QRunnable and QThread workers, which crashed with heap corruption
+under PySide6 6.11 on Windows (ARCHITECTURE.md decision 25)."""
 
 from __future__ import annotations
 
+import gc
+import itertools
+import queue
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QImage
 
 from framesift.engine.catalog import Catalog
 from framesift.engine.config import Roots
-from framesift.engine.imaging import DecodeError, open_full
+from framesift.engine.imaging import open_full
 from framesift.engine.jobs import Cancelled, JobControl
 from framesift.engine.paths import os_path
 from framesift.engine.thumbs import ThumbCache, render_thumbnail
 
+# ---------------------------------------------------------------------- GUI-thread plumbing
 
-class JobThread(QObject):
-    """Runs `fn(progress=cb, control=control)` on a Python thread and reports through signals."""
 
-    progress = Signal(dict)
-    finished_ok = Signal(object)
-    failed = Signal(str)
-    finished = Signal()  # always emitted last, after finished_ok or failed
+class ResultQueue:
+    """Thread-safe hand-off from worker threads to the GUI thread. Plain Python, no Qt."""
 
-    def __init__(
-        self,
-        fn: Callable[..., Any],
-        *,
-        control: JobControl | None = None,
-        parent: QObject | None = None,
-    ):
+    def __init__(self) -> None:
+        self._queue: queue.SimpleQueue[tuple[int, tuple[Any, ...]]] = queue.SimpleQueue()
+
+    def put(self, key: int, *args: Any) -> None:
+        self._queue.put((key, args))
+
+    def get_nowait(self) -> tuple[int, tuple[Any, ...]]:
+        return self._queue.get_nowait()
+
+
+class GuiDispatcher(QObject):
+    """Delivers worker results on the GUI thread to handlers registered by key."""
+
+    BUSY_MS = 15
+    IDLE_MS = 40
+    IDLE_TICKS = 50
+    BUDGET_S = 0.025
+
+    def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
-        self.fn: Callable[..., Any] | None = fn
-        self.control = control or JobControl()
-        self.result: Any = None
-        self._thread: threading.Thread | None = None
-        self._done = threading.Event()
+        self.queue = ResultQueue()
+        self._handlers: dict[int, Callable[..., None]] = {}
+        self._keys = itertools.count(1)
+        self._draining = False
+        self._idle_ticks = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(self.BUSY_MS)
+        self._timer.timeout.connect(self.drain)
+        self._timer.start()
 
-    def start(self) -> None:
-        if self._thread is not None:
+    def register(self, handler: Callable[..., None]) -> int:
+        key = next(self._keys)
+        self._handlers[key] = handler
+        return key
+
+    def unregister(self, key: int) -> None:
+        self._handlers.pop(key, None)
+
+    def drain(self) -> None:
+        """Run queued results for up to BUDGET_S, keeping the GUI responsive."""
+        if self._draining:  # a handler opened a nested event loop (a modal dialog)
             return
-        self._thread = threading.Thread(target=self._run, name="framesift-job", daemon=True)
-        self._thread.start()
-
-    def _run(self) -> None:
-        fn = self.fn
-        assert fn is not None
+        self._draining = True
+        delivered = 0
+        deadline = time.monotonic() + self.BUDGET_S
         try:
-            self.result = fn(progress=self.progress.emit, control=self.control)
-            self.finished_ok.emit(self.result)
-        except Cancelled:
-            self.finished_ok.emit(None)
-        except Exception as exc:
-            traceback.print_exc()
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            while time.monotonic() < deadline:
+                try:
+                    key, args = self.queue.get_nowait()
+                except queue.Empty:
+                    break
+                delivered += 1
+                handler = self._handlers.get(key)
+                if handler is None:
+                    continue
+                try:
+                    handler(*args)
+                except Exception:
+                    traceback.print_exc()
         finally:
-            self._done.set()
-            self.finished.emit()
+            self._draining = False
+        if delivered:
+            self._idle_ticks = 0
+            if self._timer.interval() != self.BUSY_MS:
+                self._timer.setInterval(self.BUSY_MS)
+        else:
+            self._idle_ticks += 1
+            if self._idle_ticks > self.IDLE_TICKS and self._timer.interval() != self.IDLE_MS:
+                self._timer.setInterval(self.IDLE_MS)
 
-    def is_running(self) -> bool:
-        return self._thread is not None and not self._done.is_set()
+    def shutdown(self) -> None:
+        """Stop delivering; results still queued are dropped here, on the GUI thread."""
+        self._timer.stop()
+        self._handlers.clear()
+        while True:
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
 
-    def is_finished(self) -> bool:
-        return self._done.is_set()
 
-    def wait(self, timeout_ms: int | None = None) -> bool:
-        """Join the thread; True when it is not running any more."""
-        thread = self._thread
-        if thread is None:
-            return True
-        thread.join(None if timeout_ms is None else timeout_ms / 1000)
-        return not thread.is_alive()
+class GuiGarbageCollector(QObject):
+    """Runs Python's cyclic garbage collector on the GUI thread only.
 
-    def release(self) -> None:
-        """Drop the job function and its result once the GUI has consumed them."""
-        self.fn = None
-        self.result = None
+    Automatic collection is switched off and the interpreter's own thresholds are checked from
+    a GUI-thread timer instead (the approach used by pyqtgraph and calibre)."""
+
+    def __init__(self, parent: QObject | None = None, interval_ms: int = 500):
+        super().__init__(parent)
+        self.threshold = gc.get_threshold()
+        gc.disable()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.check)
+        self._timer.start(interval_ms)
+
+    def check(self) -> None:
+        count0, count1, count2 = gc.get_count()
+        if count0 > self.threshold[0]:
+            gc.collect(0)
+            if count1 > self.threshold[1]:
+                gc.collect(1)
+                if count2 > self.threshold[2]:
+                    gc.collect(2)
 
 
 class TaskPool:
@@ -140,12 +196,120 @@ class TaskPool:
         return finished
 
 
-def pil_to_qimage(im: Image.Image) -> QImage:
-    if im.mode != "RGB":
-        im = im.convert("RGB")
-    data = im.tobytes("raw", "RGB")
-    qimg = QImage(data, im.width, im.height, im.width * 3, QImage.Format.Format_RGB888)
-    return qimg.copy()  # detach from the Python buffer
+# ---------------------------------------------------------------------- engine jobs
+
+
+def _run_job(
+    fn: Callable[..., Any],
+    control: JobControl,
+    out: ResultQueue,
+    key: int,
+    done: threading.Event,
+) -> None:
+    """Job thread body: plain Python only, every result goes through `out`."""
+    try:
+        result = fn(progress=partial(out.put, key, "progress"), control=control)
+        out.put(key, "ok", result)
+    except Cancelled:
+        out.put(key, "ok", None)
+    except Exception as exc:
+        traceback.print_exc()
+        out.put(key, "failed", f"{type(exc).__name__}: {exc}")
+    finally:
+        done.set()
+        out.put(key, "finished")
+
+
+class JobThread(QObject):
+    """Runs `fn(progress=cb, control=control)` on a Python thread and reports through signals.
+
+    The signals are emitted on the GUI thread by the dispatcher; `fn` must not touch Qt."""
+
+    progress = Signal(dict)
+    finished_ok = Signal(object)
+    failed = Signal(str)
+    finished = Signal()  # always emitted last, after finished_ok or failed
+
+    def __init__(
+        self,
+        fn: Callable[..., Any],
+        dispatcher: GuiDispatcher,
+        *,
+        control: JobControl | None = None,
+        parent: QObject | None = None,
+    ):
+        super().__init__(parent)
+        self.control = control or JobControl()
+        self._fn: Callable[..., Any] | None = fn
+        self._dispatcher = dispatcher
+        self._key = dispatcher.register(self._deliver)
+        self._done = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        fn, self._fn = self._fn, None
+        if self._thread is not None or fn is None:
+            return
+        self._thread = threading.Thread(
+            target=_run_job,
+            args=(fn, self.control, self._dispatcher.queue, self._key, self._done),
+            name="framesift-job",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _deliver(self, kind: str, *payload: Any) -> None:
+        if kind == "progress":
+            self.progress.emit(payload[0])
+        elif kind == "ok":
+            self.finished_ok.emit(payload[0])
+        elif kind == "failed":
+            self.failed.emit(payload[0])
+        elif kind == "finished":
+            self._dispatcher.unregister(self._key)
+            self.finished.emit()
+
+    def is_running(self) -> bool:
+        return self._thread is not None and not self._done.is_set()
+
+    def is_finished(self) -> bool:
+        return self._done.is_set()
+
+    def wait(self, timeout_ms: int | None = None) -> bool:
+        """Join the thread; True when it is not running any more."""
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(None if timeout_ms is None else timeout_ms / 1000)
+        return not thread.is_alive()
+
+
+# ---------------------------------------------------------------------- thumbnails
+
+
+def _render_thumb(
+    cache: ThumbCache,
+    catalog_uuid: str,
+    roots: Roots,
+    row: dict[str, Any],
+    meta: dict[str, Any],
+    closing: threading.Event,
+    out: ResultQueue,
+    key: int,
+    file_id: int,
+) -> None:
+    """Thumbnail worker: JPEG bytes for one file, or None; plain Python only."""
+    data: bytes | None = None
+    if not closing.is_set():
+        try:
+            data = cache.get(catalog_uuid, file_id, row["size"], row["mtime_ns"])
+            if data is None:
+                path = os_path(roots.path(row["root"]), row["rel_path"], row.get("rel_path_os"))
+                data = render_thumbnail(Path(path), meta)
+                cache.put(catalog_uuid, file_id, row["size"], row["mtime_ns"], data)
+        except Exception:
+            data = None
+    out.put(key, file_id, data)
 
 
 class ThumbSignals(QObject):
@@ -153,73 +317,56 @@ class ThumbSignals(QObject):
     failed = Signal(int)
 
 
-class ThumbTask:
-    def __init__(
-        self,
-        signals: ThumbSignals,
-        cache: ThumbCache,
-        catalog_uuid: str,
-        roots: Roots,
-        row: dict[str, Any],
-        meta: dict[str, Any],
-    ):
-        self.signals, self.cache, self.uuid, self.roots, self.row, self.meta = (
-            signals,
-            cache,
-            catalog_uuid,
-            roots,
-            row,
-            meta,
-        )
-
-    def run(self) -> None:
-        row = self.row
-        file_id = int(row["id"])
-        if getattr(self.signals, "closing", False):
-            return
-        try:
-            data = self.cache.get(self.uuid, file_id, row["size"], row["mtime_ns"])
-            if data is None:
-                path = os_path(
-                    self.roots.path(row["root"]), row["rel_path"], row.get("rel_path_os")
-                )
-                data = render_thumbnail(Path(path), self.meta)
-                self.cache.put(self.uuid, file_id, row["size"], row["mtime_ns"], data)
-            img = QImage.fromData(data, "JPEG")
-            if img.isNull():
-                raise DecodeError("bad thumbnail data")
-            if not getattr(self.signals, "closing", False):
-                self.signals.ready.emit(file_id, img)
-        except Exception:
-            if not getattr(self.signals, "closing", False):
-                self.signals.failed.emit(file_id)
-
-
 class ThumbnailLoader(QObject):
     """Loads thumbnails through the on-disk cache in a bounded thread pool."""
 
-    def __init__(self, cache: ThumbCache, parent: QObject | None = None, threads: int = 4):
+    def __init__(
+        self,
+        cache: ThumbCache,
+        dispatcher: GuiDispatcher,
+        parent: QObject | None = None,
+        threads: int = 4,
+    ):
         super().__init__(parent)
         self.cache = cache
-        self.signals = ThumbSignals()
+        self.signals = ThumbSignals(self)
         self.pool = TaskPool(threads, "framesift-thumb")
         self.pending: set[int] = set()
-        self.signals.ready.connect(self._done)
-        self.signals.failed.connect(self._done)
+        self._closing = threading.Event()
+        self._queue = dispatcher.queue
+        self._key = dispatcher.register(self._deliver)
 
     def request(
         self, catalog: Catalog, roots: Roots, row: dict[str, Any], meta: dict[str, Any]
     ) -> None:
         file_id = int(row["id"])
-        if file_id in self.pending:
+        if file_id in self.pending or self._closing.is_set():
             return
         self.pending.add(file_id)
-        task = ThumbTask(self.signals, self.cache, catalog.uuid, roots, row, meta)
-        if not self.pool.start(task.run):
+        task = partial(
+            _render_thumb,
+            self.cache,
+            catalog.uuid,
+            roots,
+            dict(row),
+            dict(meta),
+            self._closing,
+            self._queue,
+            self._key,
+            file_id,
+        )
+        if not self.pool.start(task):
             self.pending.discard(file_id)
 
-    def _done(self, file_id: int, *_args: Any) -> None:
+    def _deliver(self, file_id: int, data: bytes | None) -> None:
         self.pending.discard(file_id)
+        if self._closing.is_set():
+            return
+        image = QImage.fromData(data, "JPEG") if data else QImage()
+        if image.isNull():
+            self.signals.failed.emit(file_id)
+        else:
+            self.signals.ready.emit(file_id, image)
 
     def cancel_all(self) -> None:
         self.pool.clear()
@@ -227,8 +374,53 @@ class ThumbnailLoader(QObject):
 
     def shutdown(self, timeout_ms: int = 30000) -> None:
         """Stop feeding results into the GUI and wait for running tasks to finish."""
-        self.signals.closing = True  # type: ignore[attr-defined]
+        self._closing.set()
         self.pool.shutdown(timeout_ms)
+
+
+# ---------------------------------------------------------------------- full images
+
+
+def _decode_image(
+    path: Path,
+    fmt: str | None,
+    ext: str,
+    orientation: int | None,
+    max_side: int | None,
+    closing: threading.Event,
+    out: ResultQueue,
+    key: int,
+    request_key: tuple[int, bool],
+    file_id: int,
+) -> None:
+    """Image worker: upright RGB pixels (fit to max_side when given); plain Python only."""
+    if closing.is_set():
+        out.put(key, request_key, file_id, None, "closing")
+        return
+    try:
+        im = open_full(path, fmt, ext, orientation)
+        full = True
+        if max_side and max(im.size) > max_side:
+            im = im.copy()
+            im.thumbnail((max_side, max_side), Image.Resampling.BILINEAR)
+            full = False
+        if im.mode != "RGB":
+            im = im.convert("RGB")
+        frame = (im.tobytes("raw", "RGB"), im.width, im.height, full)
+        out.put(key, request_key, file_id, frame, None)
+    except Exception as exc:
+        out.put(key, request_key, file_id, None, str(exc) or type(exc).__name__)
+
+
+def rgb_to_qimage(data: bytes, width: int, height: int) -> QImage:
+    """Owned QImage from packed RGB bytes (GUI thread)."""
+    return QImage(data, width, height, width * 3, QImage.Format.Format_RGB888).copy()
+
+
+def pil_to_qimage(im: Image.Image) -> QImage:
+    if im.mode != "RGB":
+        im = im.convert("RGB")
+    return rgb_to_qimage(im.tobytes("raw", "RGB"), im.width, im.height)
 
 
 class ImageSignals(QObject):
@@ -236,62 +428,17 @@ class ImageSignals(QObject):
     failed = Signal(int, str)
 
 
-class ImageTask:
-    def __init__(
-        self,
-        signals: ImageSignals,
-        file_id: int,
-        path: Path,
-        fmt: str | None,
-        ext: str,
-        orientation: int | None,
-        max_side: int | None,
-    ):
-        (
-            self.signals,
-            self.file_id,
-            self.path,
-            self.fmt,
-            self.ext,
-            self.orientation,
-            self.max_side,
-        ) = signals, file_id, path, fmt, ext, orientation, max_side
-
-    def run(self) -> None:
-        if getattr(self.signals, "closing", False):
-            return
-        try:
-            im = open_full(self.path, self.fmt, self.ext, self.orientation)
-            full = True
-            if self.max_side and max(im.size) > self.max_side:
-                im = im.copy()
-                im.thumbnail((self.max_side, self.max_side), Image.Resampling.BILINEAR)
-                full = False
-            if not getattr(self.signals, "closing", False):
-                self.signals.ready.emit(self.file_id, pil_to_qimage(im), full)
-        except Exception as exc:
-            if not getattr(self.signals, "closing", False):
-                self.signals.failed.emit(self.file_id, str(exc))
-
-
 class ImageLoader(QObject):
     """Full-size (or fit-size) decodes for the review view, with prefetch."""
 
-    def __init__(self, parent: QObject | None = None, threads: int = 3):
+    def __init__(self, dispatcher: GuiDispatcher, parent: QObject | None = None, threads: int = 3):
         super().__init__(parent)
-        self.signals = ImageSignals()
+        self.signals = ImageSignals(self)
         self.pool = TaskPool(threads, "framesift-image")
         self.pending: set[tuple[int, bool]] = set()
-        self.signals.ready.connect(lambda fid, _img, full: self.pending.discard((fid, full)))
-        self.signals.failed.connect(
-            lambda fid, _msg: (
-                self.pending.discard((fid, True)) or self.pending.discard((fid, False))
-            )
-        )
-
-    def shutdown(self, timeout_ms: int = 30000) -> None:
-        self.signals.closing = True  # type: ignore[attr-defined]
-        self.pool.shutdown(timeout_ms)
+        self._closing = threading.Event()
+        self._queue = dispatcher.queue
+        self._key = dispatcher.register(self._deliver)
 
     def request(
         self,
@@ -303,12 +450,44 @@ class ImageLoader(QObject):
         *,
         max_side: int | None,
     ) -> None:
-        if getattr(self.signals, "closing", False):
+        if self._closing.is_set():
             return
-        key = (file_id, max_side is None)
-        if key in self.pending:
+        request_key = (file_id, max_side is None)
+        if request_key in self.pending:
             return
-        self.pending.add(key)
-        task = ImageTask(self.signals, file_id, path, fmt, ext, orientation, max_side)
-        if not self.pool.start(task.run):
-            self.pending.discard(key)
+        self.pending.add(request_key)
+        task = partial(
+            _decode_image,
+            path,
+            fmt,
+            ext,
+            orientation,
+            max_side,
+            self._closing,
+            self._queue,
+            self._key,
+            request_key,
+            file_id,
+        )
+        if not self.pool.start(task):
+            self.pending.discard(request_key)
+
+    def _deliver(
+        self,
+        request_key: tuple[int, bool],
+        file_id: int,
+        frame: tuple[bytes, int, int, bool] | None,
+        error: str | None,
+    ) -> None:
+        self.pending.discard(request_key)
+        if self._closing.is_set():
+            return
+        if frame is None:
+            self.signals.failed.emit(file_id, error or "")
+            return
+        data, width, height, full = frame
+        self.signals.ready.emit(file_id, rgb_to_qimage(data, width, height), full)
+
+    def shutdown(self, timeout_ms: int = 30000) -> None:
+        self._closing.set()
+        self.pool.shutdown(timeout_ms)
