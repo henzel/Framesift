@@ -208,9 +208,13 @@ def open_full(path: Path, fmt: str | None, ext: str, orientation: int | None = N
         if family in ("heic", "heif", "hif", "avif"):
             im, _source = decode_heif(path, prefer_thumbnail=False)
             return im
-        im = Image.open(to_os(path))
-        im.load()
-        return apply_orientation(im, orientation)
+        # Decode from our own handle and close it once the pixels are in memory: opened by name,
+        # Pillow keeps multi-frame files (GIF, APNG, TIFF) open for seeking and may memory-map
+        # uncompressed ones until the image is freed, and on Windows that blocks moving the file.
+        with open(to_os(path), "rb") as fh:
+            im = Image.open(fh)
+            im.load()
+            return apply_orientation(im, orientation)
     except DecodeError:
         raise
     except Exception as exc:
@@ -250,13 +254,15 @@ def small_image(path: Path, meta: dict[str, Any], max_side: int = 256) -> tuple[
         im.load()
         return _shrink(apply_orientation(im, orientation), max_side), "raw_preview"
     try:
-        im = Image.open(to_os(path))
-        if im.format == "JPEG":
-            im.draft("RGB", (max_side * 2, max_side * 2))
-        im.load()
+        with open(to_os(path), "rb") as fh:  # closed after load, see open_full
+            im = Image.open(fh)
+            if im.format == "JPEG":
+                im.draft("RGB", (max_side * 2, max_side * 2))
+            im.load()
+            im = apply_orientation(im, orientation)
     except Exception as exc:
         raise DecodeError(f"{type(exc).__name__}: {exc}") from exc
-    return _shrink(apply_orientation(im, orientation), max_side), "decode"
+    return _shrink(im, max_side), "decode"
 
 
 def _shrink(im: Image.Image, max_side: int) -> Image.Image:

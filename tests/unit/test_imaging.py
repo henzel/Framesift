@@ -90,3 +90,23 @@ def test_video_frame_and_thumbnail_cache(dataset, tmp_path: Path) -> None:
     removed = cache.trim()
     assert removed > 0 and cache.total_bytes() <= 10_000_000
     cache.close()
+
+
+def test_decoders_close_their_files(tmp_path: Path) -> None:
+    """Opened by name, Pillow keeps a GIF open for seeking until the image is freed."""
+    import gc
+    import warnings
+
+    from PIL import Image
+
+    path = tmp_path / "anim.gif"
+    frames = [Image.new("RGB", (64, 64), color) for color in ("red", "blue")]
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=100)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        full = open_full(path, "gif", "gif")
+        small, source = small_image(path, {"format": "gif", "ext": "gif"}, 32)
+        gc.collect()
+    assert full.size == (64, 64) and max(small.size) <= 32 and source == "decode"
+    assert [str(w.message) for w in caught if issubclass(w.category, ResourceWarning)] == []
+    path.rename(tmp_path / "moved.gif")
