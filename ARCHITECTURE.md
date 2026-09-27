@@ -174,8 +174,9 @@ once per file version (size+mtime) and reused.
   `reports/`, `logs/`, `tmp/`.
 * `sqlite3` from the standard library, `PRAGMA foreign_keys=ON`, `synchronous=NORMAL`,
   `cache_size=-65536` (64 MB), `temp_store=MEMORY`.
-* Journal mode: `WAL` when the catalog is on a local volume, `DELETE` when it is on a
-  network volume (WAL needs coherent shared memory, which SMB/NFS do not provide).
+* Journal mode: always `DELETE`. WAL needs memory shared by the processes of one host, which
+  SMB/NFS do not provide, and a catalog that looks local where it is written (the NAS, inside
+  Docker) is later opened from a desktop over SMB (decision 27).
   Volume type comes from `psutil.disk_partitions(all=True)` (fstype in
   `smbfs cifs nfs nfs4 afpfs webdav fuse.sshfs …`) or, on Windows, `GetDriveType ==
   DRIVE_REMOTE` / UNC path. The check is repeated on every open.
@@ -811,6 +812,12 @@ only the columns the rules need).
     never `QLayout.itemAt()`/`takeAt()`, and the folder tree is a `QAbstractItemModel` over
     plain Python nodes rather than `QStandardItem`s, whose teardown with wrapped children hits
     those stale entries. `tests/gui/test_models.py` guards both.
+27. The catalog never uses SQLite's WAL journal. 0.1.2 chose WAL whenever the catalog looked
+    local, which it does inside Docker on a NAS; SQLite on macOS locks files on SMB shares without
+    shared memory and cannot open a WAL database there ("unable to open database file"), so the
+    desktop could not open what the NAS had computed. Catalogs written that way are converted
+    when opened: locally by SQLite, over the network by rewriting the two format bytes of the
+    header (only when no WAL content is pending, with the catalog lock held).
 
 ## 22. Milestones
 

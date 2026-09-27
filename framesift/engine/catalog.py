@@ -163,6 +163,37 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+def _is_wal(db_path: Path) -> bool:
+    """True when the database file header says WAL mode (format bytes 18-19 are 2)."""
+    try:
+        with open(db_path, "rb") as fh:
+            header = fh.read(20)
+    except OSError:
+        return False
+    return header.startswith(b"SQLite format 3\x00") and header[18:20] == b"\x02\x02"
+
+
+def _leave_wal_mode(db_path: Path) -> None:
+    """Turn a WAL catalog back into a rollback-journal one without opening it in SQLite.
+
+    0.1.2 used WAL wherever the catalog looked local, which it does inside Docker on a NAS, and
+    macOS then refuses to open that database over SMB ("unable to open database file"), so
+    PRAGMA journal_mode cannot convert it from there. Once no WAL content is left (a clean close
+    deletes the -wal file) every page is in the main file and only the two format bytes differ.
+    Called with the catalog lock held."""
+    wal = db_path.with_name(db_path.name + "-wal")
+    if wal.exists() and wal.stat().st_size > 0:
+        raise CatalogError(
+            f"{db_path} has changes that were never saved to it ({wal.name}); open it once "
+            "on the machine that wrote it"
+        )
+    with open(db_path, "r+b") as fh:
+        fh.seek(18)
+        fh.write(b"\x01\x01")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
 class Catalog:
     """Thin typed layer over the SQLite catalog. One instance per process; thread-safe writes."""
 
@@ -199,6 +230,13 @@ class Catalog:
         try:
             if network is None:
                 network = is_network_path(catalog_dir)
+            if network and _is_wal(db_path):
+                if read_only:
+                    raise CatalogError(
+                        f"{db_path} is being written in WAL mode by an older Framesift; "
+                        "open it again when that job has finished"
+                    )
+                _leave_wal_mode(db_path)
             if read_only:
                 uri = f"file:{db_path.as_posix()}?mode=ro"
                 conn = sqlite3.connect(uri, uri=True, check_same_thread=False, timeout=30)
@@ -210,7 +248,10 @@ class Catalog:
             conn.execute("PRAGMA temp_store=MEMORY")
             if not read_only:
                 conn.execute("PRAGMA synchronous=NORMAL")
-                conn.execute("PRAGMA journal_mode=" + ("DELETE" if network else "WAL"))
+                # Never WAL, even on a local disk: the catalog is opened from other machines
+                # over SMB, WAL needs memory shared by the processes of one host, and macOS
+                # cannot open a WAL database on a network share at all.
+                conn.execute("PRAGMA journal_mode=DELETE")
             cat = cls(catalog_dir, conn, lock, read_only)
             if not read_only:
                 cat.migrate()

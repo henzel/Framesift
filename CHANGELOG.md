@@ -6,6 +6,14 @@ All notable changes to Framesift are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-27
+
+### Fixed
+- The desktop app could not open a catalog computed on the NAS: "unable to open database file".
+  Inside Docker the catalog folder looks local, so the engine used SQLite's WAL journal, which
+  does not work over SMB (macOS refuses it outright). The catalog now always uses the ordinary
+  rollback journal, and catalogs written by 0.1.2 are converted when they are opened.
+
 ## [0.1.2] - 2026-09-26
 
 ### Fixed
@@ -60,7 +68,8 @@ First release.
 - Desktop bundles for macOS (Apple Silicon, Intel), Windows x64 and Linux x64 (AppImage) with
   LGPL builds of ffmpeg and exiftool included.
 
-[Unreleased]: https://github.com/henzel/framesift/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/henzel/framesift/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/henzel/framesift/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/henzel/framesift/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/henzel/framesift/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/henzel/framesift/releases/tag/v0.1.0
