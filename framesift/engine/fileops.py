@@ -11,7 +11,7 @@ from pathlib import Path
 import blake3
 
 from framesift import TEMP_SUFFIX
-from framesift.engine.paths import to_os
+from framesift.engine.paths import is_excluded_dir, to_os
 
 COPY_CHUNK = 4 * 1024 * 1024
 
@@ -116,7 +116,8 @@ def copy_verify(src: Path, dst: Path) -> None:
 def cleanup_temp_files(root: Path) -> list[Path]:
     """Remove leftover *.framesift-part files from interrupted cross-volume moves."""
     removed: list[Path] = []
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not is_excluded_dir(d)]  # @eaDir, #recycle, … as the scanner
         for name in files:
             if name.endswith(TEMP_SUFFIX):
                 p = Path(dirpath) / name

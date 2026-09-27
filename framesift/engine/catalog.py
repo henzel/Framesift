@@ -163,6 +163,14 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+def same_mtime(a_ns: int, b_ns: int) -> bool:
+    """Modification times compared to the second, as rsync does. The same file reports a finer
+    or coarser time depending on how it is reached (the NAS's own disk: nanoseconds, SMB: 100 ns,
+    AFP or WebDAV: seconds), and a catalog scanned on the NAS is rescanned from a desktop over
+    SMB; an exact comparison made every file look changed and threw its analysis away."""
+    return a_ns // 1_000_000_000 == b_ns // 1_000_000_000
+
+
 def _is_wal(db_path: Path) -> bool:
     """True when the database file header says WAL mode (format bytes 18-19 are 2)."""
     try:
@@ -480,7 +488,7 @@ class Catalog:
                     new += 1
                 elif (
                     row["size"] != e.size
-                    or row["mtime_ns"] != e.mtime_ns
+                    or not same_mtime(row["mtime_ns"], e.mtime_ns)
                     or row["status"] != "present"
                 ):
                     updates.append((e.size, e.mtime_ns, e.rel_path_os, scan_ts, gen, row["id"]))

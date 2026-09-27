@@ -11,7 +11,14 @@ from typing import Any
 
 import pytest
 
-from framesift.engine.catalog import Catalog, CatalogError, CatalogLock, LockHeld, SchemaTooNew
+from framesift.engine.catalog import (
+    Catalog,
+    CatalogError,
+    CatalogLock,
+    FileEntry,
+    LockHeld,
+    SchemaTooNew,
+)
 from framesift.engine.config import ClassifyConfig, Roots
 
 
@@ -98,6 +105,38 @@ def test_wal_catalog_with_unsaved_changes_is_left_alone(tmp_path: Path) -> None:
     local = Catalog.open(tmp_path / "r", network=False)  # on a local disk SQLite converts it
     assert journal_mode(local) == "delete" and local.get_meta("probe") == "1"
     local.close()
+
+
+def test_rescan_over_smb_keeps_files_unchanged(tmp_path: Path) -> None:
+    """The NAS sees nanosecond mtimes on its own disk, a desktop sees 100 ns steps over SMB."""
+    cat = Catalog.open(tmp_path / "r")
+
+    def entry(mtime_ns: int, size: int = 1000) -> FileEntry:
+        return FileEntry(
+            "source",
+            "a/IMG_0001.HEIC",
+            None,
+            "a",
+            "IMG_0001.HEIC",
+            "IMG_0001",
+            "heic",
+            "photo",
+            size,
+            mtime_ns,
+        )
+
+    nas = 1_495_972_800_123_456_789
+    assert cat.upsert_files([entry(nas)], "t1", cat.next_scan_generation()) == (1, 0, 0)
+    over_smb = nas // 100 * 100
+    assert cat.upsert_files([entry(over_smb)], "t2", cat.next_scan_generation()) == (0, 0, 1)
+    assert cat.one("SELECT mtime_ns FROM files")["mtime_ns"] == nas  # analysis stays valid
+    assert cat.upsert_files([entry(nas + 2_000_000_000)], "t3", cat.next_scan_generation()) == (
+        0,
+        1,
+        0,
+    )
+    assert cat.upsert_files([entry(nas + 2_000_000_000, 999)], "t4", 9) == (0, 1, 0)
+    cat.close()
 
 
 def test_schema_too_new_is_refused(tmp_path: Path) -> None:

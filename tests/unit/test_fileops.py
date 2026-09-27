@@ -102,5 +102,9 @@ def test_cleanup_temp_files(tmp_path: Path) -> None:
     leftover.write_bytes(b"partial")
     keep = tmp_path / "x" / "a.jpg"
     keep.write_bytes(b"ok")
+    (tmp_path / "@eaDir" / "a.jpg").mkdir(parents=True)  # Synology thumbnails, never walked
+    ignored = tmp_path / "@eaDir" / "a.jpg" / ("SYNOPHOTO_THUMB_M.jpg" + TEMP_SUFFIX)
+    ignored.write_bytes(b"not ours")
     removed = cleanup_temp_files(tmp_path)
     assert removed == [leftover] and keep.exists() and not leftover.exists()
+    assert ignored.exists()

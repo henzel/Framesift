@@ -8,6 +8,7 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -136,14 +137,19 @@ class MainWindow(QMainWindow):
     ) -> bool:
         src = Path(source)
         try:
-            self.gws.open_source(
-                src,
-                Path(review) if review else None,
-                Path(delete) if delete else None,
-                include_subfolders=include_subfolders,
-                force_lock=force_lock,
-                read_only=read_only,
-            )
+            # opening a catalog on a network share can take a few seconds
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                self.gws.open_source(
+                    src,
+                    Path(review) if review else None,
+                    Path(delete) if delete else None,
+                    include_subfolders=include_subfolders,
+                    force_lock=force_lock,
+                    read_only=read_only,
+                )
+            finally:
+                QApplication.restoreOverrideCursor()
         except api.WorkspaceError as exc:
             QMessageBox.critical(
                 self, tr("Error"), "\n".join(t(i.key, detail=i.detail) for i in exc.issues)

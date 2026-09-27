@@ -17,7 +17,7 @@ from framesift.engine.config import ClassifyConfig, Roots
 from framesift.engine.fileops import cleanup_temp_files
 from framesift.engine.jobs import JobControl, JobRunner
 from framesift.engine.journal import UndoStats, undo_ops
-from framesift.engine.paths import RootIssue, check_roots
+from framesift.engine.paths import RootIssue, check_roots, same_volume
 from framesift.engine.plan import Plan, build_plan
 from framesift.engine.purge import PurgeStats, purge, purge_preview
 from framesift.engine.scanner import ScanStats, scan
@@ -103,9 +103,15 @@ def open_workspace(
     else:
         raise CatalogError("either a source folder or a catalog (review) folder is required")
     if not read_only:
-        for root in (roots.source, roots.review, roots.delete):
-            if root.is_dir():
-                cleanup_temp_files(root)
+        # Leftover *.framesift-part files only come from interrupted cross-volume moves. With all
+        # three folders on one volume every move is a rename, so skip the sweep: walking the whole
+        # tree over SMB on every open kept the desktop app frozen for minutes.
+        if not (
+            same_volume(roots.source, roots.review) and same_volume(roots.source, roots.delete)
+        ):
+            for root in (roots.source, roots.review, roots.delete):
+                if root.is_dir():
+                    cleanup_temp_files(root)
         # we hold the exclusive lock, so jobs still marked running belong to a dead process
         catalog.execute(
             "UPDATE jobs SET state='interrupted', finished_at=? WHERE state IN ('running','paused')",

@@ -84,3 +84,15 @@ def test_scan_and_classify_leave_files_untouched(fresh) -> None:
         )
     finally:
         ws.close()
+
+
+def test_open_skips_the_temp_file_sweep_when_moves_are_renames(tmp_path, monkeypatch) -> None:
+    """The sweep walked the whole source over SMB on every open and froze the desktop app."""
+    swept: list = []
+    monkeypatch.setattr(api, "cleanup_temp_files", lambda root: swept.append(root) or [])
+    (tmp_path / "src").mkdir()
+    api.open_workspace(tmp_path / "src").close()  # Review and Delete inside the source
+    assert swept == []
+    monkeypatch.setattr(api, "same_volume", lambda a, b: False)  # e.g. Review on another disk
+    api.open_workspace(tmp_path / "src").close()
+    assert tmp_path / "src" in swept

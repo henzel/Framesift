@@ -13,6 +13,13 @@ All notable changes to Framesift are documented here. The format follows
   Inside Docker the catalog folder looks local, so the engine used SQLite's WAL journal, which
   does not work over SMB (macOS refuses it outright). The catalog now always uses the ordinary
   rollback journal, and catalogs written by 0.1.2 are converted when they are opened.
+- Opening a folder on a NAS froze the desktop app for minutes: every open walked the whole folder
+  over the network, Synology's `@eaDir` thumbnail folders included, looking for leftovers of
+  interrupted moves between disks. That walk now runs only when Review or Delete is on another
+  disk, and skips those folders; the pointer shows that the app is busy while a folder opens.
+- A rescan from a desktop treated every file the NAS had scanned as changed, because the same
+  file reports its modification time less precisely over SMB, and threw the NAS's analysis
+  away. Modification times are now compared to the second.
 
 ## [0.1.2] - 2026-09-26
 

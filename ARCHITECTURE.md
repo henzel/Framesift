@@ -400,7 +400,9 @@ created with `mkdir(parents=True, exist_ok=True)`.
 `copy_verify`: stream-copy to `<dst>.framesift-part` while computing BLAKE3, `fsync`,
 `shutil.copystat` (mtime, permissions), re-read the copy and compare hashes, rename the
 temp file to `dst`, and only then `unlink` the source. Leftover `*.framesift-part`
-files from a crash are removed at the next start and logged to `issues`. The move
+files from a crash are removed at the next start (only when Review or Delete is on another
+volume than Source, since otherwise every move is a rename; Synology's `@eaDir` and the other
+excluded folders are not walked). The move
 returns `method='copy_verify'`; the GUI warned about slowness at folder setup already.
 
 ### 8.3 Name conflicts
@@ -441,7 +443,8 @@ the catalog in 500-row transactions and to GUI listeners (so the browser shows a
 folder within the first second). The walk covers all three roots (Review and Delete are
 catalogued too, for the tree counters and reconciliation).
 
-Incremental rule: a row whose `(rel_path, size, mtime_ns)` is unchanged is only touched
+Incremental rule: a row whose `(rel_path, size, mtime)` is unchanged, mtime compared to the
+second (decision 28), is only touched
 (`last_seen`, `seen_gen`); a changed one invalidates `file_meta`/`file_analysis` (they
 carry the size/mtime they were computed for); rows whose `seen_gen` is older than the
 current scan generation and whose subtree was listed **without errors** become
@@ -818,6 +821,10 @@ only the columns the rules need).
     desktop could not open what the NAS had computed. Catalogs written that way are converted
     when opened: locally by SQLite, over the network by rewriting the two format bytes of the
     header (only when no WAL content is pending, with the catalog lock held).
+28. A scan compares modification times to the second, as rsync does. The same file reports its
+    time in nanoseconds on the NAS's own disk and in 100 ns steps over SMB, so an exact
+    comparison made a desktop rescan treat every file the NAS had scanned as changed, discarding
+    its metadata and analysis, and the next NAS scan did the same the other way round.
 
 ## 22. Milestones
 
