@@ -251,6 +251,7 @@ class Catalog:
             else:
                 conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30)
             conn.row_factory = sqlite3.Row
+            conn.create_function("casefold", 1, str.casefold, deterministic=True)
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA cache_size=-65536")
             conn.execute("PRAGMA temp_store=MEMORY")

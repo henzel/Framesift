@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
@@ -11,6 +12,10 @@ from framesift.gui.i18n import tr
 from framesift.gui.workspace import GuiWorkspace
 
 COLUMNS = ("Time", "Action", "Category", "From", "To", "Session")
+
+
+def _journal_rows(catalog, **filters: Any) -> list[dict[str, Any]]:
+    return [dict(row) for row in catalog.journal(limit=5000, **filters)]
 
 
 class JournalModel(QAbstractTableModel):
@@ -27,20 +32,25 @@ class JournalModel(QAbstractTableModel):
         action: str | None = None,
         session_id: int | None = None,
     ) -> None:
-        self.beginResetModel()
         if self.gws.is_open:
-            self.rows = [
-                dict(r)
-                for r in self.gws.catalog.journal(
+            self.gws.request(
+                "journal.rows",
+                partial(
+                    _journal_rows,
+                    self.gws.catalog,
                     text=text or None,
                     category=category,
                     action=action,
                     session_id=session_id,
-                    limit=5000,
-                )
-            ]
+                ),
+                self.replace_rows,
+            )
         else:
-            self.rows = []
+            self.replace_rows([])
+
+    def replace_rows(self, rows: list[dict[str, Any]]) -> None:
+        self.beginResetModel()
+        self.rows = rows
         self.endResetModel()
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
@@ -62,6 +72,12 @@ class JournalModel(QAbstractTableModel):
         row = self.rows[index.row()]
         if role == Qt.ItemDataRole.UserRole:
             return row
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return (
+                row.get("from_rel" if index.column() == 3 else "to_rel")
+                if index.column() in (3, 4)
+                else None
+            )
         if role != Qt.ItemDataRole.DisplayRole:
             return None
         col = index.column()

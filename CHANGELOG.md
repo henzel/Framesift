@@ -6,6 +6,21 @@ All notable changes to Framesift are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-26
+
+### Changed
+
+- The desktop window has a library sidebar, responsive gallery, focused review and comparison
+  screens, and a macOS icon. The app follows the system appearance and provides File and View menus.
+- The Library searches filenames regardless of case. Reopening a populated catalog uses its saved
+  contents and offers an explicit rescan beside search.
+- Catalog opening, folder and file queries, analysis settings, journal filters, and moves run in
+  the background. Thumbnail queues shed work when scrolling, and review decodes fit-sized JPEGs
+  before loading full resolution on demand.
+- Batch decisions report progress. In review and comparison, undo targets the journaled operation
+  for the displayed decision. Failed moves leave the current review item available for retry.
+- The macOS installers use Qt 6.12 and require macOS 14.4 or later.
+
 ## [0.1.3] - 2026-09-27
 
 ### Fixed
@@ -75,7 +90,8 @@ First release.
 - Desktop bundles for macOS (Apple Silicon, Intel), Windows x64 and Linux x64 (AppImage) with
   LGPL builds of ffmpeg and exiftool included.
 
-[Unreleased]: https://github.com/henzel/framesift/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/henzel/framesift/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/henzel/framesift/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/henzel/framesift/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/henzel/framesift/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/henzel/framesift/compare/v0.1.0...v0.1.1

@@ -54,7 +54,7 @@ NFD/NFC file names on macOS and SMB shares.
 
 Downloads are on the [Releases](https://github.com/henzel/framesift/releases) page.
 
-* **macOS** (Apple Silicon and Intel builds): open the `.dmg` and drag Framesift to Applications.
+* **macOS 14.4 or later** (Apple Silicon and Intel builds): open the `.dmg` and drag Framesift to Applications.
   The build is unsigned unless the maintainer has an Apple Developer certificate configured.
   On first start macOS says it cannot verify the app: click **Done**, then open
   **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to the
@@ -71,18 +71,20 @@ Downloads are on the [Releases](https://github.com/henzel/framesift/releases) pa
 
 ## Quick start
 
-1. **Settings** → choose the Source folder. Review and To-delete default to
-   `<Source>/_framesift_review` and `<Source>/_framesift_delete` (both are excluded from scanning).
-   Framesift warns if the three folders are on different volumes.
-2. **Open** — the folder is scanned in the background; the browser fills up as it goes.
-3. **Automatic** → **Run analysis** → look at the report → untick what you disagree with, move the
-   sliders if needed → **Apply selected categories**. Candidates land in
-   `<Review>/<category>/<original relative path>`; similar shots in `<Review>/similar/<group>/`.
-4. **Review** the staged items (double-click anything in the browser, or use **Groups** for
-   duplicates and similar shots). `→` returns an item to its original place, `←` sends it to
-   To-delete.
+1. Open a folder from **Library** or use `⌘O` (`Ctrl+O` on Windows/Linux). A new archive scans in
+   the background and fills the Library as files are found. When you reopen a scanned archive,
+   Framesift loads the saved catalog. Use **Rescan folder** next to search to pick up changes on disk.
+2. In **Settings** you can change which folders are used for Candidates and To delete. The defaults
+   are `<Source>/_framesift_review` and `<Source>/_framesift_delete`. Framesift excludes both from the
+   source scan and warns if the folders are on different volumes.
+3. Open **Analysis** and click **Run analysis**. Review the report, choose categories and click
+   **Move selected**. **Analysis options** contains thresholds. Candidates land in
+   `<Review>/<category>/<original relative path>`. Similar shots land in `<Review>/similar/<group>/`.
+4. Open **Candidates** in the sidebar and double-click the first photo you want to review.
+   `→` restores it to its original location and `←` moves it to To delete. Use **Compare groups**
+   to compare duplicate or similar frames.
 5. When you are done: **Settings** → **Empty the Delete folder…**. Until then everything can be
-   undone from the **Journal** page.
+   undone from **Activity**.
 
 ## Keyboard
 
@@ -103,9 +105,9 @@ Manual mode:
 Group mode: `←`/`→` select a frame, `K` toggle "keep", `Enter` apply (marked frames stay, the
 rest go to To-delete), `↓` skip the group, `Ctrl/Cmd+Z` undo. The best frame is pre-marked.
 
-Browser: click, `Shift`, `Ctrl/Cmd` and rubber-band selection; **Keep**, **Delete**, **Restore**
-act on the selection; double-click or `Enter` opens manual mode at that item with the current
-sort and filter.
+Library: use `⌘F` (`Ctrl+F`) to search filenames. Click, `Shift`, `Ctrl/Cmd` and rubber-band
+selection work with **Keep**, **Move to Delete** and **Restore**. Double-click, `Enter` or
+`Space` opens manual review at the selected item with the current search, sort and filter.
 
 ## The automatic categories
 

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QProcess, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import QLabel, QStackedWidget, QVBoxLayout, QWidget
 
 from framesift.engine.external import find_binary
 from framesift.gui.i18n import tr
+
+if TYPE_CHECKING:
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+    from PySide6.QtMultimediaWidgets import QVideoWidget
 
 
 class FfmpegFrameView(QLabel):
@@ -32,13 +35,14 @@ class FfmpegFrameView(QLabel):
         if not exe:
             self.setText(tr("Cannot decode this file."))
             return
-        max_w = max(64, min(width, 1280))
-        scale = max_w / max(width, 1)
-        w, h = int(width * scale) // 2 * 2, int(height * scale) // 2 * 2
+        scale = min(1.0, 1280 / max(width, height, 1))
+        w, h = max(2, int(width * scale) // 2 * 2), max(2, int(height * scale) // 2 * 2)
         self.frame_size = QSize(w, h)
         self._buffer = bytearray()
         self.proc = QProcess(self)
         self.proc.readyReadStandardOutput.connect(self._read)
+        self.proc.errorOccurred.connect(self._process_error)
+        self.proc.finished.connect(self._process_finished)
         self.proc.start(
             exe,
             [
@@ -67,41 +71,60 @@ class FfmpegFrameView(QLabel):
         frame_bytes = self.frame_size.width() * self.frame_size.height() * 3
         if frame_bytes <= 0:
             return
-        while len(self._buffer) >= frame_bytes:
-            frame = bytes(self._buffer[:frame_bytes])
-            del self._buffer[:frame_bytes]
-            img = QImage(
-                frame,
-                self.frame_size.width(),
-                self.frame_size.height(),
-                self.frame_size.width() * 3,
-                QImage.Format.Format_RGB888,
+        complete = len(self._buffer) // frame_bytes * frame_bytes
+        if not complete:
+            return
+        frame = bytes(self._buffer[complete - frame_bytes : complete])
+        del self._buffer[:complete]
+        if self.paused:
+            return
+        img = QImage(
+            frame,
+            self.frame_size.width(),
+            self.frame_size.height(),
+            self.frame_size.width() * 3,
+            QImage.Format.Format_RGB888,
+        )
+        self.setPixmap(
+            QPixmap.fromImage(img).scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
             )
-            self.setPixmap(
-                QPixmap.fromImage(img.copy()).scaled(
-                    self.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
+        )
+
+    def _process_error(self, _error) -> None:
+        self.setText(tr("Cannot decode this file."))
+
+    def _process_finished(self, code: int, _status) -> None:
+        if code != 0:
+            self.setText(tr("Cannot decode this file."))
 
     def toggle_pause(self) -> None:
-        if self.proc is None:
-            return
-        # QProcess has no suspend; emulate by (re)starting is overkill: we stop reading instead
-        self.paused = not self.paused
-        if self.paused:
-            self.proc.readyReadStandardOutput.disconnect(self._read)
-        else:
-            self.proc.readyReadStandardOutput.connect(self._read)
+        if self.proc is not None and self.proc.processId():
+            import psutil
+
+            try:
+                process = psutil.Process(self.proc.processId())
+                if self.paused:
+                    process.resume()
+                else:
+                    process.suspend()
+                self.paused = not self.paused
+            except (psutil.Error, OSError):
+                pass
 
     def stop(self) -> None:
-        if self.proc is not None:
-            self.proc.readyReadStandardOutput.disconnect(self._read) if not self.paused else None
-            self.proc.kill()
-            self.proc.waitForFinished(1000)
-            self.proc.deleteLater()
-            self.proc = None
+        proc, self.proc = self.proc, None
+        if proc is not None:
+            proc.readyReadStandardOutput.disconnect(self._read)
+            proc.errorOccurred.disconnect(self._process_error)
+            proc.finished.disconnect(self._process_finished)
+            if proc.state() == QProcess.ProcessState.NotRunning:
+                proc.deleteLater()
+            else:
+                proc.finished.connect(proc.deleteLater)
+                proc.kill()
         self.clear()
 
 
@@ -130,6 +153,9 @@ class VideoView(QWidget):
 
     def _ensure_player(self) -> QMediaPlayer:
         if self.player is None:
+            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+            from PySide6.QtMultimediaWidgets import QVideoWidget
+
             self.video_widget = QVideoWidget()
             self.stack.addWidget(self.video_widget)
             self.player = QMediaPlayer(self)
@@ -154,7 +180,7 @@ class VideoView(QWidget):
 
     def _on_status(self, status: QMediaPlayer.MediaStatus) -> None:
         if (
-            status == QMediaPlayer.MediaStatus.EndOfMedia
+            status == type(status).EndOfMedia
             and self.loop
             and not self.using_fallback
             and self.player is not None
@@ -163,7 +189,7 @@ class VideoView(QWidget):
             self.player.play()
 
     def _on_error(self, error: QMediaPlayer.Error, message: str) -> None:
-        if self.current is None or self.using_fallback or error == QMediaPlayer.Error.NoError:
+        if self.current is None or self.using_fallback or error == type(error).NoError:
             return
         self.using_fallback = True
         if self.player is not None:
@@ -179,7 +205,8 @@ class VideoView(QWidget):
             return
         if self.player is None:
             return
-        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+        state = self.player.playbackState()
+        if state == type(state).PlayingState:
             self.player.pause()
         else:
             self.player.play()
@@ -189,9 +216,10 @@ class VideoView(QWidget):
             self.audio.setMuted(not self.audio.isMuted())
 
     def stop(self) -> None:
-        if self.player is not None:
+        playing = self.current is not None
+        self.current = None
+        if self.player is not None and playing:
             self.player.stop()
             self.player.setSource(QUrl())
         self.fallback.stop()
-        self.current = None
         self.using_fallback = False

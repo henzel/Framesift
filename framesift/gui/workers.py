@@ -19,6 +19,7 @@ import queue
 import threading
 import time
 import traceback
+from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
@@ -30,9 +31,8 @@ from PIL import Image
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QImage
 
-from framesift.engine.catalog import Catalog
 from framesift.engine.config import Roots
-from framesift.engine.imaging import open_full
+from framesift.engine.imaging import open_review_image
 from framesift.engine.jobs import Cancelled, JobControl
 from framesift.engine.paths import os_path
 from framesift.engine.thumbs import ThumbCache, render_thumbnail
@@ -59,7 +59,7 @@ class GuiDispatcher(QObject):
     BUSY_MS = 15
     IDLE_MS = 40
     IDLE_TICKS = 50
-    BUDGET_S = 0.025
+    BUDGET_S = 0.008
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -158,13 +158,16 @@ class TaskPool:
         self._closed = False
 
     def start(self, fn: Callable[[], None]) -> bool:
+        return self.submit(fn) is not None
+
+    def submit(self, fn: Callable[[], None]) -> Future[None] | None:
         with self._lock:
             if self._closed:
-                return False
+                return None
             future = self._executor.submit(fn)
             self._futures.add(future)
         future.add_done_callback(self._forget)
-        return True
+        return future
 
     def _forget(self, future: Future[None]) -> None:
         with self._lock:
@@ -275,6 +278,10 @@ class JobThread(QObject):
     def is_finished(self) -> bool:
         return self._done.is_set()
 
+    @property
+    def thread(self) -> threading.Thread | None:
+        return self._thread
+
     def wait(self, timeout_ms: int | None = None) -> bool:
         """Join the thread; True when it is not running any more."""
         thread = self._thread
@@ -286,6 +293,12 @@ class JobThread(QObject):
 
 # ---------------------------------------------------------------------- thumbnails
 
+ThumbKey = tuple[int, int, int]
+
+
+def thumbnail_key(row: dict[str, Any]) -> ThumbKey:
+    return int(row["id"]), int(row["size"]), int(row["mtime_ns"])
+
 
 def _render_thumb(
     cache: ThumbCache,
@@ -296,25 +309,27 @@ def _render_thumb(
     closing: threading.Event,
     out: ResultQueue,
     key: int,
-    file_id: int,
+    generation: int,
+    request_key: ThumbKey,
 ) -> None:
     """Thumbnail worker: JPEG bytes for one file, or None; plain Python only."""
     data: bytes | None = None
+    file_id, size, mtime = request_key
     if not closing.is_set():
         try:
-            data = cache.get(catalog_uuid, file_id, row["size"], row["mtime_ns"])
+            data = cache.get(catalog_uuid, file_id, size, mtime)
             if data is None:
                 path = os_path(roots.path(row["root"]), row["rel_path"], row.get("rel_path_os"))
                 data = render_thumbnail(Path(path), meta)
-                cache.put(catalog_uuid, file_id, row["size"], row["mtime_ns"], data)
+                cache.put(catalog_uuid, file_id, size, mtime, data)
         except Exception:
-            data = None
-    out.put(key, file_id, data)
+            pass
+    out.put(key, generation, request_key, data)
 
 
 class ThumbSignals(QObject):
-    ready = Signal(int, QImage)
-    failed = Signal(int)
+    ready = Signal(object, QImage)
+    failed = Signal(object)
 
 
 class ThumbnailLoader(QObject):
@@ -331,46 +346,71 @@ class ThumbnailLoader(QObject):
         self.cache = cache
         self.signals = ThumbSignals(self)
         self.pool = TaskPool(threads, "framesift-thumb")
-        self.pending: set[int] = set()
+        self._threads = threads
+        self._generation = 0
+        self._running: set[tuple[int, ThumbKey]] = set()
+        self._waiting: OrderedDict[ThumbKey, tuple[str, Callable[[], None]]] = OrderedDict()
         self._closing = threading.Event()
         self._queue = dispatcher.queue
         self._key = dispatcher.register(self._deliver)
 
     def request(
-        self, catalog: Catalog, roots: Roots, row: dict[str, Any], meta: dict[str, Any]
+        self,
+        catalog_uuid: str,
+        roots: Roots,
+        row: dict[str, Any],
+        meta: dict[str, Any],
+        *,
+        scope: str = "",
     ) -> None:
-        file_id = int(row["id"])
-        if file_id in self.pending or self._closing.is_set():
+        key = thumbnail_key(row)
+        if (self._generation, key) in self._running or self._closing.is_set():
             return
-        self.pending.add(file_id)
+        if key in self._waiting:
+            return
         task = partial(
             _render_thumb,
             self.cache,
-            catalog.uuid,
+            catalog_uuid,
             roots,
             dict(row),
             dict(meta),
             self._closing,
             self._queue,
             self._key,
-            file_id,
+            self._generation,
+            key,
         )
-        if not self.pool.start(task):
-            self.pending.discard(file_id)
+        self._waiting[key] = (scope, task)
+        if len(self._waiting) > 128:
+            self._waiting.popitem(last=False)
+        self._pump()
 
-    def _deliver(self, file_id: int, data: bytes | None) -> None:
-        self.pending.discard(file_id)
-        if self._closing.is_set():
+    def _pump(self) -> None:
+        while self._waiting and len(self._running) < self._threads and not self._closing.is_set():
+            key, (_, task) = self._waiting.popitem(last=False)
+            if self.pool.start(task):
+                self._running.add((self._generation, key))
+
+    def _deliver(self, generation: int, key: ThumbKey, data: bytes | None) -> None:
+        self._running.discard((generation, key))
+        self._pump()
+        if generation != self._generation or self._closing.is_set():
             return
         image = QImage.fromData(data, "JPEG") if data else QImage()
         if image.isNull():
-            self.signals.failed.emit(file_id)
+            self.signals.failed.emit(key)
         else:
-            self.signals.ready.emit(file_id, image)
+            self.signals.ready.emit(key, image)
+
+    def discard_waiting(self, scope: str) -> None:
+        for key, (owner, _) in list(self._waiting.items()):
+            if owner == scope:
+                del self._waiting[key]
 
     def cancel_all(self) -> None:
-        self.pool.clear()
-        self.pending.clear()
+        self._generation += 1
+        self._waiting.clear()
 
     def shutdown(self, timeout_ms: int = 30000) -> None:
         """Stop feeding results into the GUI and wait for running tasks to finish."""
@@ -390,7 +430,7 @@ def _decode_image(
     closing: threading.Event,
     out: ResultQueue,
     key: int,
-    request_key: tuple[int, bool],
+    request_key: tuple[int, int, bool],
     file_id: int,
 ) -> None:
     """Image worker: upright RGB pixels (fit to max_side when given); plain Python only."""
@@ -398,12 +438,7 @@ def _decode_image(
         out.put(key, request_key, file_id, None, "closing")
         return
     try:
-        im = open_full(path, fmt, ext, orientation)
-        full = True
-        if max_side and max(im.size) > max_side:
-            im = im.copy()
-            im.thumbnail((max_side, max_side), Image.Resampling.BILINEAR)
-            full = False
+        im, full = open_review_image(path, fmt, ext, orientation, max_side=max_side)
         if im.mode != "RGB":
             im = im.convert("RGB")
         frame = (im.tobytes("raw", "RGB"), im.width, im.height, full)
@@ -435,7 +470,8 @@ class ImageLoader(QObject):
         super().__init__(parent)
         self.signals = ImageSignals(self)
         self.pool = TaskPool(threads, "framesift-image")
-        self.pending: set[tuple[int, bool]] = set()
+        self._generation = 0
+        self.pending: dict[tuple[int, int, bool], Future] = {}
         self._closing = threading.Event()
         self._queue = dispatcher.queue
         self._key = dispatcher.register(self._deliver)
@@ -452,10 +488,9 @@ class ImageLoader(QObject):
     ) -> None:
         if self._closing.is_set():
             return
-        request_key = (file_id, max_side is None)
+        request_key = (self._generation, file_id, max_side is None)
         if request_key in self.pending:
             return
-        self.pending.add(request_key)
         task = partial(
             _decode_image,
             path,
@@ -469,18 +504,29 @@ class ImageLoader(QObject):
             request_key,
             file_id,
         )
-        if not self.pool.start(task):
-            self.pending.discard(request_key)
+        future = self.pool.submit(task)
+        if future is not None:
+            self.pending[request_key] = future
+
+    def retain(self, file_ids: set[int]) -> None:
+        for key, future in list(self.pending.items()):
+            if key[1] not in file_ids and future.cancel():
+                del self.pending[key]
+
+    def cancel_all(self) -> None:
+        self._generation += 1
+        self.pool.clear()
+        self.pending.clear()
 
     def _deliver(
         self,
-        request_key: tuple[int, bool],
+        request_key: tuple[int, int, bool],
         file_id: int,
         frame: tuple[bytes, int, int, bool] | None,
         error: str | None,
     ) -> None:
-        self.pending.discard(request_key)
-        if self._closing.is_set():
+        self.pending.pop(request_key, None)
+        if request_key[0] != self._generation or self._closing.is_set():
             return
         if frame is None:
             self.signals.failed.emit(file_id, error or "")

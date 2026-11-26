@@ -194,9 +194,12 @@ def apply_group_decision(
         except Exception as exc:
             stats.errors.append(f"{item_id}: {exc}")
             continue
-        stats.items += 1
-        if not isinstance(result, str):
+        if isinstance(result, str):
+            stats.items += 1
+        else:
+            stats.items += bool(result.moved)
             stats.files += result.moved
+            stats.errors.extend(result.errors)
     for item_id in delete_items:
         try:
             outcome = to_delete(catalog, roots, item_id, session_id)
@@ -204,7 +207,8 @@ def apply_group_decision(
             stats.errors.append(f"{item_id}: {exc}")
             continue
         if outcome:
-            stats.items += 1
+            stats.items += bool(outcome.moved)
             stats.files += outcome.moved
             stats.bytes += outcome.bytes
+            stats.errors.extend(outcome.errors)
     return stats

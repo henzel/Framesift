@@ -86,7 +86,8 @@ def test_category_card_replaces_example_labels(qtbot) -> None:
     before = layout_item_wrappers()
     for ids in ([4, 5], [6, 7, 8], [9]):
         card.set_report(report(ids))
-    assert card.grid.count() == 1 and list(card.thumbs) == [9]
+    assert card.grid.count() == 3 and list(card.thumbs) == [9]
+    assert all(image.isHidden() for image in card._labels[1:])
     # Qt deletes the layout item of a removed label on its own; a Python wrapper of it would
     # stay behind in shiboken's wrapper map and corrupt the heap later (ARCHITECTURE.md 26).
     assert layout_item_wrappers() == before
