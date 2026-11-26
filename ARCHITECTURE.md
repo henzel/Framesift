@@ -697,7 +697,8 @@ project. The owner chose the first option (§23).
   `master-latest-*-lgpl` static builds for Windows and Linux (the `latest` release only
   carries master snapshots; they are ≥ 7.1 and decode HEIF grids, verified); for macOS,
   FFmpeg 7.1.1 is compiled in the release workflow from source with `--disable-gpl
-  --disable-nonfree --enable-videotoolbox` (cached per version). exiftool: the version is
+  --disable-nonfree --enable-videotoolbox`. Both binaries and the LGPL notice are cached
+  together per version and architecture. exiftool: the version is
   read from `exiftool.org/ver.txt` at build time; the official Windows 64-bit package and
   the Perl distribution for macOS/Linux, run with the system `perl` (present on macOS and
   practically every Linux); if `perl` is missing the app degrades to "RAW previews

@@ -60,13 +60,22 @@ jobs:
         id: ffmpeg-cache
         uses: actions/cache@v4
         with:
-          path: packaging/bin/macos/ffmpeg*
-          key: ffmpeg-lgpl-7.1.1-${{ matrix.arch }}-v1
+          path: |
+            packaging/bin/macos/ffmpeg
+            packaging/bin/macos/ffprobe
+            packaging/bin/macos/LICENSE-ffmpeg.txt
+          key: ffmpeg-lgpl-7.1.1-${{ matrix.arch }}-v2
       - name: Build LGPL ffmpeg from source (macOS)
         if: matrix.platform == 'macos' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
         run: |
           brew install nasm pkg-config
           bash packaging/macos/build_ffmpeg.sh 7.1.1
+      - name: Verify the macOS FFmpeg files
+        if: matrix.platform == 'macos'
+        run: |
+          packaging/bin/macos/ffmpeg -version
+          packaging/bin/macos/ffprobe -version
+          test -s packaging/bin/macos/LICENSE-ffmpeg.txt
       - name: Linux system libraries for Qt
         if: matrix.platform == 'linux'
         run: |
