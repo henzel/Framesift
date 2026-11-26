@@ -706,7 +706,8 @@ project. The owner chose the first option (§23).
   `gui` extra: ruff, mypy (engine + CLI), pytest with `QT_QPA_PLATFORM=offscreen`; ffmpeg
   from apt / brew / the BtbN LGPL build on Windows.
 * **Release (`release.yml`)**: on tag `v*`: four bundles (macOS arm64 on `macos-15`,
-  Intel on `macos-15-intel`), each smoke-tested by starting its CLI and app
+  Intel on `macos-15-intel`), each smoke-tested by starting its app and running a parallel
+  analysis through its bundled CLI
   (`packaging/smoke_bundle.py`), Docker buildx for amd64+arm64 → GHCR, draft GitHub
   Release with the CHANGELOG section attached. The bundles are also built and smoke-tested
   on pushes to main that change packaging (nothing is published). Desktop releases use

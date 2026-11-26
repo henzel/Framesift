@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from datetime import UTC, datetime
+from multiprocessing import freeze_support
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -542,6 +543,8 @@ def gui(
 
 
 def main() -> None:
+    # Frozen workers re-enter this executable with multiprocessing's bootstrap arguments.
+    freeze_support()
     # Windows consoles and redirected output may not be UTF-8; never crash on a reason string
     for stream in (sys.stdout, sys.stderr):
         try:
