@@ -1,4 +1,4 @@
-"""Smoke-test a PyInstaller bundle: the CLI reports its version and the app starts and exits.
+"""Smoke-test the bundled CLI, parallel analysis, and GUI startup.
 
 Usage (from the repository root, after pyinstaller): python packaging/smoke_bundle.py <platform>
 where <platform> is macos, windows or linux.
@@ -6,11 +6,15 @@ where <platform> is macos, windows or linux.
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PIL import Image
 
 from framesift import __version__
 
@@ -18,6 +22,32 @@ from framesift import __version__
 def fail(message: str) -> None:
     print(f"bundle smoke test FAILED: {message}")
     sys.exit(1)
+
+
+def smoke_parallel_analysis(cli: Path, env: dict[str, str]) -> None:
+    with TemporaryDirectory(prefix="framesift-bundle-") as directory:
+        archive = Path(directory)
+        n_photos = 16
+        for i in range(n_photos):
+            with Image.new("RGB", (64, 48), (i * 16, 96, 128)) as photo:
+                photo.save(archive / f"frame-{i}.jpg")
+        for command, flags, count_key in (
+            ("scan", [], "files_seen"),
+            ("classify", ["--workers", "2", "--categories", "blurry_dark"], "analyzed"),
+        ):
+            result = subprocess.run(
+                [str(cli), command, "--source", directory, "--json", *flags],
+                capture_output=True,
+                encoding="utf-8",
+                timeout=120,
+                env=env,
+            )
+            if result.returncode:
+                fail(f"CLI {command}: exit {result.returncode}, stderr {result.stderr[-3000:]!r}")
+            count = json.loads(result.stdout)[command][count_key]
+            if count != n_photos:
+                fail(f"CLI {command}: expected {n_photos} photos, got {count}")
+    print(f"CLI ok: scanned and analyzed {n_photos} photos with two analysis workers")
 
 
 def main() -> None:
@@ -51,6 +81,7 @@ def main() -> None:
             f"CLI --version: exit {out.returncode}, output {out.stdout.strip()!r} {out.stderr[-500:]!r}"
         )
     print(f"CLI ok: {out.stdout.strip()}")
+    smoke_parallel_analysis(cli, env)
 
     run = subprocess.run(
         [str(gui), "--smoke-test"], capture_output=True, text=True, timeout=300, env=env

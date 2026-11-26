@@ -21,6 +21,10 @@ All notable changes to Framesift are documented here. The format follows
   for the displayed decision. Failed moves leave the current review item available for retry.
 - The macOS installers use Qt 6.12 and require macOS 14.4 or later.
 
+### Fixed
+
+- The bundled CLI starts its worker processes when analyzing an archive in parallel.
+
 ## [0.1.3] - 2026-09-27
 
 ### Fixed
