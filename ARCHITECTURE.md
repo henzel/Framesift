@@ -108,7 +108,7 @@ framesift/                     Python package (src layout not used: keeps PyInst
     views/                     browser.py manual.py groups.py auto.py journal.py settings.py
     workers.py                 job threads, thumbnail/image pools, GUI-thread result dispatcher
     media/                     ImageView (QGraphicsView), VideoView (QMediaPlayer), FfmpegFrameView
-    i18n/                      framesift_ru.ts / .qm (UI strings)
+    i18n.py                    English and Russian UI strings
   resources/                   icons (own, MIT)
 tests/
   fixtures/make_dataset.py     synthetic dataset generator (Pillow + ffmpeg)
@@ -565,52 +565,48 @@ and as GUI sliders, and re-evaluation after a slider change needs no filesystem 
   embedded preview / `Image.draft` reduced decode / full decode. Videos: one frame at
   `min(1 s, 10 %)` via `ffmpeg -ss … -frames:v 1 -f image2pipe` (LGPL build); Live Photo
   MOVs reuse the photo's thumbnail.
-* Full-size images for manual mode: decoded in a worker at `min(full, 2 × viewport)`
-  (JPEG uses DCT scaling), EXIF orientation applied; ±5 items prefetched within a memory
-  budget (default 600 MB); `Z` decodes full resolution on demand.
+* Manual review requests a 1,920 px fit image, using JPEG DCT scaling where supported. It
+  prefetches the next two frames and keeps a rolling 56 MiB decoded cache. `Z` decodes full
+  resolution on demand and can retain the current full-size image above the fit cache budget.
+* The gallery caches decoded thumbnails up to 64 MiB and submits at most four renders at once.
+  When the viewport changes, waiting gallery thumbnails are dropped. Cache keys identify the
+  catalog and file version, and results from an earlier workspace are discarded.
 * HEIC decoding: **pi-heif** (libheif + libde265, LGPL-3.0 wheels), with an
   **ffmpeg fallback** (FFmpeg ≥ 7.1 demuxes HEIF incl. tiled grids and decodes HEVC with
   its native LGPL decoder). Both paths are tested. See §17 for why not pillow-heif.
 
 ## 14. GUI (`framesift.gui`)
 
-* PySide6 widgets, Fusion style on Windows/Linux, native on macOS; light/dark from
-  `QStyleHints.colorScheme` (Qt ≥ 6.5) with a palette pair; i18n through Python
-  dictionaries (`gui/i18n.py`, keyed by the English string, and the engine's catalogs for
-  reasons/categories) instead of `.ts/.qm` files: no build step, testable, one language
-  switch for GUI and engine **[D]**; language from the system locale unless overridden in
-  Settings.
-* Threads: the main thread only paints. Engine jobs, thumbnail loading (cancelled when
-  scrolled away), image decodes and single moves run on plain Python threads that hand their
-  results to a GUI-thread dispatcher (decision 25); pixel analysis stays in the engine's
-  process pool.
-* **Browser**: left `QTreeView` (Source subfolders; Review categories with count/size;
-  Delete with count/size; counters updated from journal signals), centre `QListView` in
-  icon mode over `CatalogListModel` (ids only in memory, row cache LRU 10k, uniform
-  item sizes, batched layout → smooth at 100k), sort by date/name/size, filter
-  photo/video/all, selection by click/Shift/Ctrl-Cmd/rubber band, actions Keep / To
-  Delete / Restore, double-click/Enter opens manual mode at the item with the same
-  sort and filter.
-* **Manual mode**: `QGraphicsView` image (zoom `Z`, drag to pan), `QGraphicsVideoItem`
-  + `QMediaPlayer`/`QAudioOutput` for video (Space, M), `L` hold plays the Live Photo
-  MOV, collapsible info panel (`I`), keys `→ ← ↓ Cmd/Ctrl+Z Esc`, buttons with key
-  hints, status bar `123 / 4567 · kept · to delete · GB to free`, "Show reviewed"
-  toggle. Video fallback: if `QMediaPlayer` reports an error for HEVC, a
-  `FfmpegFrameView` streams frames from `ffmpeg -f rawvideo` (no audio, clearly labelled).
-* **Group mode**: strip of the group + large selected frame; `← → K Enter ↓ Cmd/Ctrl+Z`;
-  keeper pre-marked; `Enter` = marked items keep (Review members are restored to
-  Source), unmarked go to Delete **[I]**.
-* **Auto mode**: pipeline page (scan → classify → report → apply) with progress, ETA,
-  pause, resume after restart, cancel; report table with per-category checkbox, count,
-  size, confidence, 12 example thumbnails, threshold sliders, low-priority toggle,
-  worker count; "Move all Live Photo MOVs" button with its warning.
-* **Journal**: table with search and filters (session, category, action, path), undo
-  last / session / category / all.
-* **Settings**: three folders with defaults, "Include subfolders", volume check with the
-  copy warning, Apple Photos refusal / Lightroom warning, per-source memory
-  (`platformdirs.user_config_dir`, keyed by catalog uuid), language, cache limit.
-* **Purge**: dialog with count and size; local volume → `send2trash`; network volume →
-  the irreversible warning naming the NAS shared-folder recycle bin and snapshots.
+* The desktop workspace uses PySide6 and follows system appearance. The macOS frame, menus
+  and folder chooser use the platform controls. `gui/ui.py` defines the shared spacing,
+  color and control treatment. The sidebar combines the main work areas and the archive
+  tree. `gui/i18n.py` supplies English and Russian labels.
+* Workspace validation, catalog open and close, catalog reads, classification, moves and
+  media decoding run on plain Python workers. Qt receives results through the GUI-thread
+  dispatcher with a per-tick time budget. Read requests are identified by workspace and
+  ticket, so an older request cannot replace a newer search or filter. Closing a workspace
+  drains its catalog workers before releasing the database and its lock.
+* Mutating activities use the same workspace gate. Engine jobs wait for already submitted
+  item actions, while the UI continues to browse cached results. Batch moves use one worker
+  job with progress and cancellation between items. Only the purge workflow deletes files.
+* **Library** opens a populated catalog from disk and scans new archives in the background.
+  Use **Rescan folder** to pick up changes in a saved archive. Folder summaries and ordering
+  resolve separately. The icon model holds IDs and names. It loads metadata in 96-row batches
+  when the gallery asks for it. Search matches Unicode filenames without regard to case.
+* **Manual review** opens at the item's current position in the Library search, sort and
+  filter. It shows a photo preview or starts the media player on demand, with a collapsible
+  inspector and the existing keyboard controls. A file action advances after its journal
+  result arrives. Undo uses that decision's operation ID. The session totals come from a
+  background journal query. Video fallback streams frames through FFmpeg without audio.
+* **Compare groups** shows a filmstrip and a large version of the selected frame. The suggested
+  keeper starts marked. Applying a group and reversing its exact journal entries use the
+  same background action lane as manual review.
+* **Analysis** runs the existing pipeline and displays selected categories, thumbnails and
+  report-only entries. Threshold changes are debounced and reuse stored measurements. The
+  Apply button waits for the report that corresponds to the current selection and thresholds.
+* **Activity** shows recent moves with debounced path search, filters and undo by scope.
+  **Settings** exposes archive paths, storage and processing preferences. Root validation
+  runs on open. Purge retains the existing explicit local-trash or network-delete confirmation.
 
 ## 15. CLI (`framesift.cli`)
 
@@ -709,11 +705,12 @@ project. The owner chose the first option (§23).
 * **CI (`ci.yml`)**: on every PR, matrix ubuntu/windows/macos × Python 3.12 with the
   `gui` extra: ruff, mypy (engine + CLI), pytest with `QT_QPA_PLATFORM=offscreen`; ffmpeg
   from apt / brew / the BtbN LGPL build on Windows.
-* **Release (`release.yml`)**: on tag `v*`: four bundles (macOS arm64 on `macos-14`,
-  Intel on the current Intel runner label), each smoke-tested by starting its CLI and app
+* **Release (`release.yml`)**: on tag `v*`: four bundles (macOS arm64 on `macos-15`,
+  Intel on `macos-15-intel`), each smoke-tested by starting its CLI and app
   (`packaging/smoke_bundle.py`), Docker buildx for amd64+arm64 → GHCR, draft GitHub
   Release with the CHANGELOG section attached. The bundles are also built and smoke-tested
-  on pushes to main that change packaging (nothing is published).
+  on pushes to main that change packaging (nothing is published). Desktop releases use
+  Qt 6.12 and declare its macOS 14.4 minimum in the app bundle.
 * **Housekeeping**: `delete-failed-runs.yml` removes failed runs from the Actions list
   (on demand).
 * **Signing**: if `APPLE_CERTIFICATE_P12`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`,
@@ -750,9 +747,9 @@ project. The owner chose the first option (§23).
 | Target (spec §5) | Approach |
 |---|---|
 | Start < 3 s | lazy imports (numpy, media, workers), no catalog work before the window shows |
-| 50k folder: first thumbnails < 1 s | model holds ids only; rows and thumbnails stream; walk results appear per directory batch |
-| Next item < 100 ms | ±5 prefetch, decoded pixmaps in memory, thumbnail shown while the full image decodes |
-| RSS < 1.5 GB at 100k | id lists, row LRU 10k, prefetch budget 600 MB, thumbnail pixmap cache 200 MB, workers in separate processes |
+| 50k folder: first thumbnails < 1 s | IDs and names loaded in a worker, viewport metadata and thumbnails fetched in batches |
+| Next item < 100 ms | Two fit previews prefetched, with full resolution on demand |
+| RSS < 1.5 GB at 100k | Compact gallery snapshot, bounded metadata and image caches, analysis in separate processes |
 | SMB | header-only readers with one large read instead of many small ones; hashing only for size collisions; pixel stages meant to run on the NAS |
 | Catalog on SMB | batched transactions, 64 MB page cache, `DELETE` journal, `progress.json` for readers |
 
@@ -772,6 +769,32 @@ project. The owner chose the first option (§23).
 The classify peak is dominated by the in-memory row list (three loads of ~50 columns × 50k
 rows); at 100k files it stays within the budget but it is the first thing to slim down (load
 only the columns the rules need).
+
+### 20.2 Desktop audit on Apple Silicon
+
+The previous window opened the catalog, read gallery metadata during painting, and rebuilt
+the activity table and analysis report on the GUI thread. Manual review queried the catalog
+for every prefetched frame. Group decisions and several undo paths waited for file I/O
+in the window's event loop. A competing thumbnail queue could continue decoding items from
+a previous viewport or archive.
+
+Median of three runs on macOS arm64, Python 3.12.16 and Qt 6.12.0. Both builds used the same
+already scanned archive of 50,000 synthetic JPEGs on a local disk and a fresh thumbnail
+cache per run. The Qt offscreen benchmark isolates event-loop costs from the display server.
+
+| Measure | 0.1.3 (`042b7ef`) | Updated desktop |
+|---|---:|---:|
+| Import modules and show the window | 332 ms | 365 ms |
+| Open callback on the GUI thread | 133 ms | 0.4 ms |
+| Open to first thumbnail | 167 ms | 117 ms |
+| Sort callback | 35.5 ms | 0.2 ms |
+| Largest observed gap in the 10 ms UI timer during open and sorting | 135 ms | 17 ms |
+| Next frame in manual review | 1.7 ms | 1.0 ms |
+
+Use `python tests/perf/bench.py --gui-only --root <root>` with a scanned
+`<root>/archive` to repeat the GUI measurements. The timings characterize local I/O.
+The GUI tests simulate a blocked catalog open to verify that the window continues
+processing events. Live SMB throughput depends on the NAS and network.
 
 ## 21. Decisions where the specification is silent
 

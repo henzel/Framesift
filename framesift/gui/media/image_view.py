@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
 
 
@@ -24,7 +24,7 @@ class ImageView(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
-        self.setBackgroundBrush(Qt.GlobalColor.black)
+        self.setBackgroundBrush(QColor("#111214"))
         self.fit_mode = True
         self.is_full = False
         self.native_size = (0, 0)
@@ -45,6 +45,8 @@ class ImageView(QGraphicsView):
     def clear(self) -> None:
         self._item.setPixmap(QPixmap())
         self._scene.setSceneRect(QRectF())
+        self.is_full = False
+        self.native_size = (0, 0)
 
     def fit(self) -> None:
         self.fit_mode = True

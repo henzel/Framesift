@@ -4,20 +4,25 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
+from unicodedata import normalize
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, Qt
+from PySide6.QtCore import QAbstractListModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 
+from framesift.engine.catalog import Catalog
+from framesift.gui.workers import ThumbKey, thumbnail_key
 from framesift.gui.workspace import GuiWorkspace
 
-ROW_CACHE = 20_000
-THUMB_BUDGET = 200 * 1024 * 1024
+ROW_BATCH = 96
+ROW_CACHE = 32
+THUMB_BUDGET = 64 * 1024 * 1024
 FileIdRole = Qt.ItemDataRole.UserRole + 1
 RowRole = Qt.ItemDataRole.UserRole + 2
 
 
-@dataclass
+@dataclass(frozen=True)
 class ListQuery:
     root: str = "source"
     dir_path: str | None = None  # None = whole root; "" = root folder only when recursive is False
@@ -27,6 +32,7 @@ class ListQuery:
     kind: str = "all"  # all | photo | video
     show_reviewed: bool = True
     category: str | None = None  # review root: first path component
+    search: str = ""
 
     def sql(self) -> tuple[str, list[Any]]:
         where = ["f.root=?", "f.status='present'", "f.item_id=f.id"]
@@ -38,33 +44,39 @@ class ListQuery:
         else:
             where.append("f.kind IN ('photo','raw','video')")
         if self.category is not None:
-            where.append("(f.dir_path=? OR f.dir_path LIKE ?)")
-            params += [self.category, self.category + "/%"]
-        elif self.dir_path is not None:
-            if self.recursive:
-                where.append("(f.dir_path=? OR f.dir_path LIKE ?)")
-                params += [self.dir_path, (self.dir_path + "/%") if self.dir_path else "%"]
+            if self.category:
+                prefix = self.category + "/"
+                where.append("(f.dir_path=? OR substr(f.dir_path,1,?)=?)")
+                params += [self.category, len(prefix), prefix]
             else:
+                where.append("f.dir_path=''")
+        elif self.dir_path is not None:
+            if self.recursive and self.dir_path:
+                prefix = self.dir_path + "/"
+                where.append("(f.dir_path=? OR substr(f.dir_path,1,?)=?)")
+                params += [self.dir_path, len(prefix), prefix]
+            elif not self.recursive:
                 where.append("f.dir_path=?")
                 params.append(self.dir_path)
         if not self.show_reviewed:
             where.append("f.reviewed_at IS NULL")
+        if self.search:
+            where.append("instr(casefold(f.name),?)>0")
+            params.append(normalize("NFC", self.search).casefold())
         order = {
             "date": "COALESCE(m.date_taken_ts, f.mtime_ns/1000000000)",
-            "name": "f.name COLLATE NOCASE",
+            "name": "casefold(f.name)",
             "size": "f.size",
         }[self.sort]
         direction = "DESC" if self.descending else "ASC"
-        sql = (
-            f"SELECT f.id FROM files f LEFT JOIN file_meta m ON m.file_id=f.id WHERE {' AND '.join(where)} "
-            f"ORDER BY {order} {direction}, f.id {direction}"
-        )
+        join = " LEFT JOIN file_meta m ON m.file_id=f.id" if self.sort == "date" else ""
+        sql = f"SELECT f.id, f.name FROM files f{join} WHERE {' AND '.join(where)} ORDER BY {order} {direction}, f.id {direction}"
         return sql, params
 
 
 ROW_SQL = (
     "SELECT f.*, m.format AS m_format, m.width AS m_width, m.height AS m_height, m.orientation AS m_orientation, "
-    "m.make AS m_make, m.model AS m_model, m.date_taken AS m_date_taken, m.duration_ms AS m_duration_ms, "
+    "m.make AS m_make, m.model AS m_model, m.date_taken AS m_date_taken, m.date_source AS m_date_source, m.duration_ms AS m_duration_ms, "
     "m.codec AS m_codec, m.preview_kind AS m_preview_kind, m.preview_offset AS m_preview_offset, "
     "m.preview_length AS m_preview_length, m.content_id AS m_content_id, "
     "(SELECT COUNT(*) FROM files c WHERE c.item_id=f.id AND c.companion_role='live_video' AND c.status='present') AS live_count "
@@ -85,20 +97,41 @@ def meta_for_thumbnail(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def catalog_rows(catalog: Catalog, ids: list[int]) -> dict[int, dict[str, Any]]:
+    if not ids:
+        return {}
+    sql = ROW_SQL % ",".join("?" * len(ids))
+    return {int(row["id"]): dict(row) for row in catalog.query(sql, ids)}
+
+
+def _gallery_snapshot(catalog: Catalog, query: ListQuery) -> tuple:
+    sql, params = query.sql()
+    records = catalog.query(sql, params)
+    ids = [int(row[0]) for row in records]
+    names = [row[1] for row in records]
+    positions = {fid: pos for pos, fid in enumerate(ids)}
+    return ids, names, positions
+
+
 class CatalogListModel(QAbstractListModel):
+    loaded = Signal()
+    load_failed = Signal(str)
+
     def __init__(self, gws: GuiWorkspace, parent=None):
         super().__init__(parent)
         self.gws = gws
         self.query = ListQuery()
         self.ids: list[int] = []
+        self._names: list[str] = []
         self._pos: dict[int, int] = {}
-        self._rows: OrderedDict[int, dict[str, Any]] = OrderedDict()
-        self._thumbs: OrderedDict[int, QPixmap] = OrderedDict()
+        self._batches: OrderedDict[int, dict[int, dict[str, Any]]] = OrderedDict()
+        self._pending: set[int] = set()
+        self._thumbs: OrderedDict[ThumbKey, QPixmap] = OrderedDict()
         self._thumb_bytes = 0
-        self._failed: set[int] = set()
-        self.icon_size = QSize(160, 160)
-        self._placeholder = QPixmap(self.icon_size)
-        self._placeholder.fill(Qt.GlobalColor.transparent)
+        self._failed: set[ThumbKey] = set()
+        self.icon_size = QSize(154, 116)
+        self.loading = False
+        self.error = ""
         gws.thumb_loader.signals.ready.connect(self._thumb_ready)
         gws.thumb_loader.signals.failed.connect(self._thumb_failed)
 
@@ -106,33 +139,46 @@ class CatalogListModel(QAbstractListModel):
     def load(self, query: ListQuery | None = None) -> None:
         if query is not None:
             self.query = query
-        self.beginResetModel()
-        self._rows.clear()
-        self._failed.clear()
-        if self.gws.is_open:
-            sql, params = self.query.sql()
-            self.ids = [int(r[0]) for r in self.gws.catalog.query(sql, params)]
-        else:
-            self.ids = []
-        self._pos = {fid: i for i, fid in enumerate(self.ids)}
-        self.endResetModel()
-
-    def refresh_keep_position(self) -> None:
-        """Reload ids after files moved, keeping cached rows for ids that still exist."""
         if not self.gws.is_open:
+            self.clear()
             return
-        sql, params = self.query.sql()
-        new_ids = [int(r[0]) for r in self.gws.catalog.query(sql, params)]
-        if new_ids == self.ids:
-            self._rows.clear()
+        self.loading = True
+        self.error = ""
+        self.gws.request(
+            "gallery.list",
+            partial(_gallery_snapshot, self.gws.catalog, self.query),
+            self._set_snapshot,
+            self._load_error,
+        )
+
+    def clear(self) -> None:
+        self.gws.cancel_requests("gallery.")
+        self._failed.clear()
+        self._thumbs.clear()
+        self._thumb_bytes = 0
+        self.error = ""
+        self._set_snapshot(([], [], {}))
+
+    def _set_snapshot(self, snapshot: tuple) -> None:
+        ids, names, positions = snapshot
+        self.loading = False
+        self._pending.clear()
+        self.gws.cancel_requests("gallery.rows.")
+        self._batches.clear()
+        if ids == self.ids and names == self._names:
             if self.ids:
                 self.dataChanged.emit(self.index(0), self.index(len(self.ids) - 1))
+            self.loaded.emit()
             return
         self.beginResetModel()
-        self.ids = new_ids
-        self._pos = {fid: i for i, fid in enumerate(self.ids)}
-        self._rows.clear()
+        self.ids, self._names, self._pos = ids, names, positions
         self.endResetModel()
+        self.loaded.emit()
+
+    def _load_error(self, message: str) -> None:
+        self.error = message
+        self._set_snapshot(([], [], {}))
+        self.load_failed.emit(message)
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
         return 0 if parent.isValid() else len(self.ids)
@@ -140,12 +186,21 @@ class CatalogListModel(QAbstractListModel):
     def row_at(self, index: int) -> dict[str, Any] | None:
         if index < 0 or index >= len(self.ids):
             return None
-        fid = self.ids[index]
-        row = self._rows.get(fid)
-        if row is None:
-            self._fetch_around(index)
-            row = self._rows.get(fid)
-        return row
+        batch = index // ROW_BATCH
+        if batch in self._batches:
+            self._batches.move_to_end(batch)
+            return self._batches[batch].get(self.ids[index])
+        if batch not in self._pending and self.gws.is_open:
+            self._pending.add(batch)
+            request = f"gallery.rows.{batch}"
+            start = batch * ROW_BATCH
+            self.gws.request(
+                request,
+                partial(catalog_rows, self.gws.catalog, self.ids[start : start + ROW_BATCH]),
+                partial(self._set_rows, batch),
+                partial(self._row_error, batch),
+            )
+        return None
 
     def row_for_id(self, file_id: int) -> dict[str, Any] | None:
         pos = self._pos.get(file_id)
@@ -154,89 +209,95 @@ class CatalogListModel(QAbstractListModel):
     def index_of(self, file_id: int) -> int:
         return self._pos.get(file_id, -1)
 
-    def _fetch_around(self, index: int, span: int = 120) -> None:
-        lo, hi = max(0, index - span // 4), min(len(self.ids), index + span)
-        wanted = [fid for fid in self.ids[lo:hi] if fid not in self._rows]
-        if not wanted:
-            return
-        catalog = self.gws.catalog
-        for i in range(0, len(wanted), 400):
-            chunk = wanted[i : i + 400]
-            sql = ROW_SQL % ",".join("?" * len(chunk))
-            for r in catalog.query(sql, chunk):
-                self._rows[int(r["id"])] = dict(r)
-        while len(self._rows) > ROW_CACHE:
-            self._rows.popitem(last=False)
+    def _set_rows(self, batch: int, rows: dict[int, dict[str, Any]]) -> None:
+        self._pending.discard(batch)
+        self._batches[batch] = rows
+        while len(self._batches) > ROW_CACHE:
+            self._batches.popitem(last=False)
+        start = batch * ROW_BATCH
+        end = min(start + ROW_BATCH, len(self.ids)) - 1
+        if end >= start:
+            self.dataChanged.emit(
+                self.index(start), self.index(end), [RowRole, Qt.ItemDataRole.DecorationRole]
+            )
+
+    def _row_error(self, batch: int, message: str) -> None:
+        self._set_rows(batch, {})
+        self.load_failed.emit(message)
 
     # ------------------------------------------------------------------ data
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
             return None
-        row = self.row_at(index.row())
-        if row is None:
+        pos = index.row()
+        if not 0 <= pos < len(self.ids):
             return None
         if role == Qt.ItemDataRole.DisplayRole:
-            return row["name"]
+            return self._names[pos]
         if role == FileIdRole:
-            return int(row["id"])
+            return self.ids[pos]
+        if role == Qt.ItemDataRole.SizeHintRole:
+            return QSize(self.icon_size.width() + 14, self.icon_size.height() + 32)
+        if role not in (RowRole, Qt.ItemDataRole.DecorationRole, Qt.ItemDataRole.ToolTipRole):
+            return None
+        row = self.row_at(pos)
+        if row is None:
+            return None
         if role == RowRole:
             return row
         if role == Qt.ItemDataRole.DecorationRole:
             return self.thumbnail(row)
         if role == Qt.ItemDataRole.ToolTipRole:
             return row["rel_path"]
-        if role == Qt.ItemDataRole.SizeHintRole:
-            return QSize(self.icon_size.width() + 16, self.icon_size.height() + 34)
         return None
 
-    def thumbnail(self, row: dict[str, Any]) -> QPixmap:
-        fid = int(row["id"])
-        pix = self._thumbs.get(fid)
+    def thumbnail(self, row: dict[str, Any]) -> QPixmap | None:
+        key = thumbnail_key(row)
+        pix = self._thumbs.get(key)
         if pix is not None:
-            self._thumbs.move_to_end(fid)
+            self._thumbs.move_to_end(key)
             return pix
-        if fid not in self._failed and self.gws.is_open:
+        if key not in self._failed and self.gws.is_open:
             self.gws.thumb_loader.request(
-                self.gws.catalog, self.gws.roots, row, meta_for_thumbnail(row)
+                self.gws.catalog_uuid, self.gws.roots, row, meta_for_thumbnail(row), scope="gallery"
             )
-        return self._placeholder
+        return None
 
     def has_thumbnail(self, file_id: int) -> bool:
-        return file_id in self._thumbs
+        return any(key[0] == file_id for key in self._thumbs)
 
-    def _thumb_ready(self, file_id: int, image: QImage) -> None:
+    def cached_thumbnail(self, pos: int) -> QPixmap | None:
+        row = (
+            self._batches.get(pos // ROW_BATCH, {}).get(self.ids[pos])
+            if 0 <= pos < len(self.ids)
+            else None
+        )
+        return self._thumbs.get(thumbnail_key(row)) if row is not None else None
+
+    def _thumb_ready(self, key: ThumbKey, image: QImage) -> None:
+        pos = self._pos.get(key[0])
+        if pos is None:
+            return
         pix = QPixmap.fromImage(image)
-        self._thumbs[file_id] = pix
+        old = self._thumbs.pop(key, None)
+        if old is not None:
+            self._thumb_bytes -= old.width() * old.height() * 4
+        self._thumbs[key] = pix
         self._thumb_bytes += pix.width() * pix.height() * 4
         while self._thumb_bytes > THUMB_BUDGET and len(self._thumbs) > 1:
             _fid, old = self._thumbs.popitem(last=False)
             self._thumb_bytes -= old.width() * old.height() * 4
-        pos = self._pos.get(file_id)
+        idx = self.index(pos)
+        self.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DecorationRole])
+
+    def _thumb_failed(self, key: ThumbKey) -> None:
+        self._failed.add(key)
+        pos = self._pos.get(key[0])
         if pos is not None:
             idx = self.index(pos)
             self.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DecorationRole])
-
-    def _thumb_failed(self, file_id: int) -> None:
-        self._failed.add(file_id)
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
         return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-
-    def remove_id(self, file_id: int) -> None:
-        pos = self._pos.get(file_id)
-        if pos is None:
-            return
-        self.beginRemoveRows(QModelIndex(), pos, pos)
-        del self.ids[pos]
-        self._pos = {fid: i for i, fid in enumerate(self.ids)}
-        self._rows.pop(file_id, None)
-        self.endRemoveRows()
-
-    def invalidate_row(self, file_id: int) -> None:
-        self._rows.pop(file_id, None)
-        pos = self._pos.get(file_id)
-        if pos is not None:
-            idx = self.index(pos)
-            self.dataChanged.emit(idx, idx)

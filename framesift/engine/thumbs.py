@@ -62,14 +62,12 @@ class ThumbCache:
                 "SELECT size, mtime_ns FROM thumbs WHERE catalog=? AND file_id=?",
                 (catalog, file_id),
             ).fetchone()
-        if row is None or row[0] != size or row[1] != mtime_ns:
-            return None
-        path = self._path(catalog, file_id)
-        try:
-            data = path.read_bytes()
-        except OSError:
-            return None
-        with self._lock:
+            if row is None or row[0] != size or row[1] != mtime_ns:
+                return None
+            try:
+                data = self._path(catalog, file_id).read_bytes()
+            except OSError:
+                return None
             self._conn.execute(
                 "UPDATE thumbs SET last_access=? WHERE catalog=? AND file_id=?",
                 (time.time(), catalog, file_id),
@@ -82,10 +80,10 @@ class ThumbCache:
     def put(self, catalog: str, file_id: int, size: int, mtime_ns: int, data: bytes) -> None:
         path = self._path(catalog, file_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, path)
         with self._lock:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, path)
             self._conn.execute(
                 "INSERT OR REPLACE INTO thumbs(catalog,file_id,size,mtime_ns,bytes,last_access) VALUES(?,?,?,?,?,?)",
                 (catalog, file_id, size, mtime_ns, len(data), time.time()),

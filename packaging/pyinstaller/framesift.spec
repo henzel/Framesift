@@ -29,7 +29,7 @@ CLI_EXE = "framesift"
 assert GUI_EXE.lower() != CLI_EXE.lower(), "GUI and CLI executable names collide"
 
 binaries = []
-datas = collect_data_files("framesift", includes=["engine/schema/*.sql"])
+datas = collect_data_files("framesift", includes=["engine/schema/*.sql", "gui/resources/*.png"])
 if BIN_DIR.is_dir():
     for entry in BIN_DIR.iterdir():
         if entry.is_file():
@@ -129,7 +129,8 @@ if PLATFORM == "macos":
             "CFBundleExecutable": GUI_EXE,
             "LSBackgroundOnly": False,
             "NSHighResolutionCapable": True,
-            "LSMinimumSystemVersion": "12.0",
+            # Published bundles use Qt 6.12, whose macOS deployment target is 14.4.
+            "LSMinimumSystemVersion": "14.4",
             "NSRequiresAquaSystemAppearance": False,
             "CFBundleShortVersionString": __version__.replace(".dev0", ""),
             "NSAppleEventsUsageDescription": "Framesift moves files between the folders you chose.",

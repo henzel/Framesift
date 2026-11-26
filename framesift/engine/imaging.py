@@ -203,18 +203,39 @@ def video_frame(path: Path, *, at_seconds: float = 1.0, max_side: int = 320) -> 
 
 def open_full(path: Path, fmt: str | None, ext: str, orientation: int | None = None) -> Image.Image:
     """Full, upright decode of a photo (any supported format). Raises DecodeError."""
+    image, _ = open_review_image(path, fmt, ext, orientation)
+    return image
+
+
+def open_review_image(
+    path: Path,
+    fmt: str | None,
+    ext: str,
+    orientation: int | None = None,
+    *,
+    max_side: int | None = None,
+) -> tuple[Image.Image, bool]:
+    """Upright review pixels and whether they are full resolution."""
     family = fmt or ext
     try:
         if family in ("heic", "heif", "hif", "avif"):
             im, _source = decode_heif(path, prefer_thumbnail=False)
-            return im
-        # Decode from our own handle and close it once the pixels are in memory: opened by name,
-        # Pillow keeps multi-frame files (GIF, APNG, TIFF) open for seeking and may memory-map
-        # uncompressed ones until the image is freed, and on Windows that blocks moving the file.
-        with open(to_os(path), "rb") as fh:
-            im = Image.open(fh)
-            im.load()
-            return apply_orientation(im, orientation)
+            full = not max_side or max(im.size) <= max_side
+        else:
+            # Own the handle so Pillow cannot retain it and block a later move on Windows.
+            with open(to_os(path), "rb") as fh:
+                im = Image.open(fh)
+                full = not max_side or max(im.size) <= max_side
+                if max_side and not full and im.format == "JPEG":
+                    scale = max_side / max(im.size)
+                    im.draft(
+                        "RGB", (max(1, round(im.width * scale)), max(1, round(im.height * scale)))
+                    )
+                im.load()
+                im = apply_orientation(im, orientation)
+        if max_side and not full:
+            im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+        return im, full
     except DecodeError:
         raise
     except Exception as exc:

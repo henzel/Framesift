@@ -33,6 +33,7 @@ def open_and_scan(qtbot, window: MainWindow, root: Path) -> None:
 
 def classify(qtbot, window: MainWindow) -> None:
     window.show_page("auto")
+    qtbot.waitUntil(window.auto.run_btn.isEnabled)
     with qtbot.waitSignal(window.gws.job_finished, timeout=120000):
         window.auto.run_btn.click()
     qtbot.waitUntil(
@@ -53,22 +54,25 @@ def test_auto_mode_report_thresholds_and_apply(
     if manifest["short_videos"]:
         assert auto.cards["short_videos"].count_label.text() != "0"
         auto.short_video.setValue(1.0)  # recompute from the catalog, no rescanning
-        assert auto.cards["short_videos"].count_label.text() == "0"
+        qtbot.waitUntil(lambda: auto.cards["short_videos"].count_label.text() == "0")
         auto.short_video.setValue(3.0)
+        qtbot.waitUntil(lambda: auto.cards["short_videos"].count_label.text() != "0")
     assert "Live Photo" in auto.report_only.text()
     # disable everything but screenshots and junk, then apply
     for name, card in auto.cards.items():
         card.enabled_box.setChecked(name in ("screenshots", "junk"))
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    qtbot.waitUntil(auto.apply_btn.isEnabled)
     with qtbot.waitSignal(window.gws.job_finished, timeout=60000):
         auto.apply_btn.click()
     review = root / "_framesift_review"
     assert (review / "screenshots" / "2020" / "IMG_0005.PNG").exists()
     assert (review / "junk" / "junk" / "empty.jpg").exists()
     assert not (review / "duplicates").exists()
-    assert auto.cards["screenshots"].count_label.text() == "0"
+    qtbot.waitUntil(lambda: auto.cards["screenshots"].count_label.text() == "0")
     assert "Moved" in auto.progress_label.text() or "Перенесено" in auto.progress_label.text()
     if manifest["live_pairs"]:
+        qtbot.waitUntil(auto.live_btn.isEnabled)
         with qtbot.waitSignal(window.gws.job_finished, timeout=60000):
             auto.live_btn.click()
         assert (review / "live_photos" / "2020" / "IMG_0001.MOV").exists()
@@ -91,10 +95,12 @@ def test_group_mode_keys(qtbot, window: MainWindow, fresh, monkeypatch) -> None:
     for name, card in auto.cards.items():
         card.enabled_box.setChecked(name in ("similar", "duplicates"))
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    qtbot.waitUntil(auto.apply_btn.isEnabled)
     with qtbot.waitSignal(window.gws.job_finished, timeout=60000):
         auto.apply_btn.click()
     window.show_page("groups")
     groups = window.groups
+    qtbot.waitUntil(lambda: bool(groups.members))
     assert len(groups.groups) == 2  # one duplicate group, one similar group
     assert groups.groups[0]["category"] == "duplicates"
     members = groups.members
@@ -110,16 +116,18 @@ def test_group_mode_keys(qtbot, window: MainWindow, fresh, monkeypatch) -> None:
     qtbot.keyClick(groups, Qt.Key.Key_K)
     assert int(other["id"]) in groups.marked and int(keeper["id"]) not in groups.marked
     qtbot.keyClick(groups, Qt.Key.Key_Return)
-    assert window.gws.wait_actions()
+    qtbot.waitUntil(lambda: groups.gpos == 1 and bool(groups.members))
     assert window.gws.file_row(int(other["id"]))["root"] == "source"
     assert window.gws.file_row(int(keeper["id"]))["root"] == "delete"
     assert groups.gpos == 1 and groups.groups[1]["category"] == "similar"
     # undo the group decision
     qtbot.keyClick(groups, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    qtbot.waitUntil(lambda: groups.gpos == 0 and bool(groups.members))
     assert window.gws.file_row(int(other["id"]))["root"] == "review"
     assert window.gws.file_row(int(keeper["id"]))["root"] == "source"
     assert groups.gpos == 0
     qtbot.keyClick(groups, Qt.Key.Key_Down)  # skip
+    qtbot.waitUntil(lambda: groups.gpos == 1 and len(groups.members) == 3)
     assert groups.gpos == 1 and len(groups.members) == 3
     qtbot.keyClick(groups, Qt.Key.Key_Escape)
     assert window.pages.currentWidget() is window.auto

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -12,20 +12,18 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QListWidget,
-    QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from framesift import DEFAULT_DELETE_DIRNAME, DEFAULT_REVIEW_DIRNAME
-from framesift.engine.i18n import t
-from framesift.engine.paths import check_roots
 from framesift.gui.i18n import tr
 from framesift.gui.prefs import Prefs
+from framesift.gui.ui import button, label, page
 
 
 class FolderPicker(QWidget):
@@ -34,7 +32,8 @@ class FolderPicker(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.edit = QLineEdit(self)
-        self.button = QPushButton(tr("Browse…"), self)
+        self.edit.setProperty("role", "path")
+        self.button = button("Choose…", variant="quiet")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.edit, 1)
@@ -80,44 +79,73 @@ class SettingsView(QWidget):
         self.cache_limit.setValue(float(prefs.get("cache_limit_gb", 2.0)))
         self.workers = QSpinBox(self)
         self.workers.setRange(0, 64)
-        self.workers.setSpecialValueText("auto")
+        self.workers.setSpecialValueText(tr("Automatic workers"))
         self.workers.setValue(int(prefs.get("workers", 0)))
         self.low_priority = QCheckBox(tr("Low priority"), self)
         self.low_priority.setChecked(bool(prefs.get("low_priority", False)))
-        self.open_btn = QPushButton(tr("Open"), self)
-        self.purge_btn = QPushButton(tr("Empty the Delete folder…"), self)
+        self.open_btn = button("Open archive", variant="primary")
+        self.open_btn.setEnabled(False)
+        self.purge_btn = button("Empty the Delete folder…", variant="danger")
         self.purge_btn.setEnabled(False)
-        self.warnings = QLabel(self)
-        self.warnings.setWordWrap(True)
         self.recent = QListWidget(self)
-        self.recent.setMaximumHeight(120)
+        self.recent.setAccessibleName(tr("Recent"))
+        self.recent.setMaximumHeight(108)
 
+        content = QWidget(self)
+        content.setObjectName("scrollContent")
+        content.setMaximumWidth(860)
         form = QFormLayout()
-        form.addRow(tr("Source folder"), self.source)
-        form.addRow(tr("Review folder"), self.review)
-        form.addRow(tr("Delete folder"), self.delete)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setVerticalSpacing(10)
+        for key, picker in (
+            ("Source folder", self.source),
+            ("Review folder", self.review),
+            ("Delete folder", self.delete),
+        ):
+            title = label(tr(key))
+            title.setBuddy(picker.edit)
+            picker.edit.setAccessibleName(tr(key))
+            form.addRow(title, picker)
         form.addRow("", self.subfolders)
-        form.addRow(tr("Language"), self.language)
-        form.addRow(tr("Thumbnail cache limit (GB)"), self.cache_limit)
-        form.addRow(tr("Worker processes"), self.workers)
-        form.addRow("", self.low_priority)
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.open_btn)
-        buttons.addWidget(self.purge_btn)
-        buttons.addStretch(1)
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addLayout(buttons)
-        layout.addWidget(self.warnings)
-        layout.addWidget(QLabel(tr("Recent")))
-        layout.addWidget(self.recent)
-        layout.addStretch(1)
+        general = QFormLayout()
+        general.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        general.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        general.setVerticalSpacing(10)
+        general.addRow(tr("Language"), self.language)
+        general.addRow(tr("Thumbnail cache limit (GB)"), self.cache_limit)
+        general.addRow(tr("Worker processes"), self.workers)
+        general.addRow("", self.low_priority)
+        body = QVBoxLayout(content)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(12)
+        body.addWidget(label(tr("Archive folders"), "section"))
+        body.addLayout(form)
+        body.addWidget(self.open_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        body.addSpacing(7)
+        body.addWidget(label(tr("General"), "section"))
+        body.addLayout(general)
+        body.addSpacing(7)
+        body.addWidget(label(tr("Storage"), "section"))
+        body.addWidget(self.purge_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        body.addSpacing(7)
+        self.recent_label = label(tr("Recent"), "section")
+        body.addWidget(self.recent_label)
+        body.addWidget(self.recent)
+        body.addStretch(1)
+
+        scroll = QScrollArea(self)
+        scroll.setProperty("role", "flat")
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content)
+        layout = page(self)
+        layout.addWidget(label(tr("Settings"), "title"))
+        layout.addWidget(scroll, 1)
 
         idx = self.language.findData(prefs.get("language", "system"))
         self.language.setCurrentIndex(max(idx, 0))
         self.source.changed.connect(self._source_changed)
-        self.review.changed.connect(lambda _t: self._validate())
-        self.delete.changed.connect(lambda _t: self._validate())
         self.open_btn.clicked.connect(self._open)
         self.purge_btn.clicked.connect(self.purge_requested)
         self.language.currentIndexChanged.connect(self._language)
@@ -129,7 +157,10 @@ class SettingsView(QWidget):
 
     def reload_recent(self) -> None:
         self.recent.clear()
-        for s in self.prefs.get("recent", []):
+        recent = self.prefs.get("recent", [])
+        self.recent.setVisible(bool(recent))
+        self.recent_label.setVisible(bool(recent))
+        for s in recent:
             self.recent.addItem(s)
 
     def set_source(self, source: str) -> None:
@@ -142,23 +173,7 @@ class SettingsView(QWidget):
             self.review.set_path(saved.get("review") or str(Path(source) / DEFAULT_REVIEW_DIRNAME))
             self.delete.set_path(saved.get("delete") or str(Path(source) / DEFAULT_DELETE_DIRNAME))
             self.subfolders.setChecked(bool(saved.get("include_subfolders", True)))
-        self._validate()
-
-    def _validate(self) -> list:
-        src = self.source.path()
-        if not src:
-            self.warnings.setText("")
-            return []
-        issues = check_roots(
-            Path(src), Path(self.review.path() or src), Path(self.delete.path() or src)
-        )
-        self.warnings.setText(
-            "\n".join(
-                f"{'⛔' if i.level == 'error' else '⚠'} {t(i.key, detail=i.detail)}" for i in issues
-            )
-        )
-        self.open_btn.setEnabled(not any(i.level == "error" for i in issues))
-        return issues
+        self.open_btn.setEnabled(bool(source))
 
     def _open(self) -> None:
         if not self.source.path():

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+from multiprocessing import freeze_support
 
 from framesift import APP_ID, APP_NAME, __version__
 
 
 def main(argv: list[str] | None = None) -> int:
+    freeze_support()
     from PySide6.QtCore import QCoreApplication, QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -16,15 +17,16 @@ def main(argv: list[str] | None = None) -> int:
     from framesift.gui.main_window import MainWindow
     from framesift.gui.prefs import Prefs
     from framesift.gui.theme import apply_theme
+    from framesift.gui.ui import application_icon
 
     argv = list(sys.argv[1:] if argv is None else argv)
-    # Packaging check used by the release workflow: start, build the window, close, exit 0.
     smoke_test = "--smoke-test" in argv
-    argv = [a for a in argv if a != "--smoke-test"]
+    argv = [argument for argument in argv if argument != "--smoke-test"]
     QCoreApplication.setOrganizationName(APP_NAME)
     QCoreApplication.setApplicationName(APP_NAME)
     QCoreApplication.setApplicationVersion(__version__)
     app = QApplication([APP_ID, *argv])
+    app.setWindowIcon(application_icon())
     apply_theme(app)
     prefs = Prefs()
     lang = prefs.get("language", "system")
@@ -32,20 +34,11 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow(prefs)
     window.show()
     if smoke_test:
-        QTimer.singleShot(1500, window.close)
+        QTimer.singleShot(100, window.close)
         return app.exec()
-    folder = next((a for a in argv if not a.startswith("-")), None) or next(
-        iter(prefs.get("recent", [])), None
-    )
-    if folder and Path(folder).is_dir():
-        saved = prefs.source_settings(folder)
-        window.settings.set_source(folder)
-        window.open_source(
-            folder,
-            saved.get("review", ""),
-            saved.get("delete", ""),
-            bool(saved.get("include_subfolders", True)),
-        )
+    folder = next((arg for arg in argv if not arg.startswith("-")), None)
+    if folder:
+        QTimer.singleShot(0, lambda: window.open_saved(folder))
     return app.exec()
 
 

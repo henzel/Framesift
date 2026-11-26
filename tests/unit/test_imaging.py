@@ -11,6 +11,7 @@ from framesift.engine.imaging import (
     decode_heif,
     ffmpeg_decode_image,
     open_full,
+    open_review_image,
     small_image,
     video_frame,
 )
@@ -110,3 +111,14 @@ def test_decoders_close_their_files(tmp_path: Path) -> None:
     assert full.size == (64, 64) and max(small.size) <= 32 and source == "decode"
     assert [str(w.message) for w in caught if issubclass(w.category, ResourceWarning)] == []
     path.rename(tmp_path / "moved.gif")
+
+
+def test_review_preview_respects_orientation_without_changing_full_size(tmp_path: Path) -> None:
+    from PIL import Image
+
+    path = tmp_path / "portrait.jpg"
+    Image.new("RGB", (4000, 3000), "red").save(path)
+    preview, is_full = open_review_image(path, "jpeg", "jpg", orientation=6, max_side=1000)
+    assert preview.size == (750, 1000) and not is_full
+    original, is_full = open_review_image(path, "jpeg", "jpg", orientation=6)
+    assert original.size == (3000, 4000) and is_full
